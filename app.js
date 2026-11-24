@@ -1,636 +1,1799 @@
+/* =============================================================================
+   SOC Analist Paneli — 5651 & KVKK Log İzleme
+   -----------------------------------------------------------------------------
+   HTML5 + CSS3 + Vanilla JS (ES Module) + Chart.js 4 + Firebase Web SDK v10.12.2
+   Veri : Firebase Firestore (logs)   |  Oturum : Firebase Authentication
+   AI   : Google Gemini (BYOK — anahtar yalnızca localStorage'da tutulur)
+   ========================================================================== */
 
-let currentLogs = [];
+/* ------------------------------- Yapılandırma ------------------------------ */
+const firebaseConfig = {
+  apiKey: "AIzaSyAuts9sbuV-MoZxKR44shz4sFzk0gDR8ig",
+  authDomain: "logornegi-12cfb.firebaseapp.com",
+  projectId: "logornegi-12cfb",
+  storageBucket: "logornegi-12cfb.firebasestorage.app",
+  messagingSenderId: "613328383024",
+  appId: "1:613328383024:web:d0e859fabe1aa6cf6a11f5",
+  measurementId: "G-KZ0WET10S8"
+};
 
-document.addEventListener("DOMContentLoaded", () => {
-  // 1. Logları Yükle (Read & LocalStorage Veri Kalıcılığı)
-  const savedLogs = localStorage.getItem("kvkk_logs");
-  
-  if (savedLogs) {
-    // Hafızada veri varsa onu kullan (Sayfa yenilendiğinde veriler kaybolmaz)
-    currentLogs = JSON.parse(savedLogs);
-    renderLogs();
-  } else {
-    // Hafızada yoksa logs.json dosyasından çek ve hafızaya kaydet
-    fetch("logs.json")
-      .then((response) => {
-        if (!response.ok) throw new Error(`logs.json okunamadı (HTTP ${response.status})`);
-        return response.json();
-      })
-      .then((logs) => {
-        currentLogs = Array.isArray(logs) ? logs : (logs.logs || []);
-        saveToLocalStorage();
-        renderLogs();
-      })
-      .catch((err) => {
-        console.error("Log yükleme hatası:", err);
-        const container = document.getElementById("logContainer");
-        if (container) {
-          container.innerHTML = `<p style="color:red;"><b>Loglar yüklenemedi:</b> ${err.message}</p>`;
-        }
+const FIREBASE_SDK_VERSION = "10.12.2";
+const LOGS_COLLECTION = "logs";
+const SEED_FILE = "logs.json";
+const API_KEY_STORAGE = "gemini_api_key";
+const DEMO_SESSION_KEY = "soc_demo_session";
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+const VIEW_META = {
+  overview: { title: "Genel Bakış", subtitle: "5651 & KVKK uyumlu güvenlik operasyon özeti" },
+  logs: { title: "Log Kayıtları", subtitle: "Tüm kayıtlar, arama ve çoklu filtreleme" },
+  ai: { title: "AI Analiz", subtitle: "Gemini ile 5651 & KVKK günlük yönetici özeti (BYOK)" },
+  threats: { title: "Tehdit Durumu", subtitle: "CRITICAL ve HIGH seviyesindeki bekleyen tehditler" },
+  compliance: { title: "Uyumluluk (KVKK)", subtitle: "5651 zaman damgası ve KVKK veri erişim denetimi" },
+  settings: { title: "Ayarlar", subtitle: "API anahtarı yönetimi ve analist hesabı" }
+};
+
+/* --------------------------------- Durum ---------------------------------- */
+const state = {
+  logs: [],
+  view: [],
+  db: null,
+  fb: null,
+  auth: null,
+  fbAuth: null,
+  user: null,
+  demo: false,
+  authReady: false,
+  authFailed: false,
+  authMode: "login",
+  charts: { severity: null, daily: null, type: null },
+  lastSync: null,
+  currentView: "overview",
+  pendingAiRun: false,
+  aiReportText: "",
+  filters: { query: "", severity: "ALL", status: "ALL", type: "ALL" }
+};
+
+/* -------------------------------- Yardımcılar ----------------------------- */
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// "YYYY-MM-DD HH:mm:ss", ISO veya Firestore Timestamp → Date
+function parseTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  if (typeof value === "object" && typeof value.toDate === "function") {
+    try {
+      const d = value.toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const normalized = text.includes("T") ? text : text.replace(" ", "T");
+  const date = new Date(normalized);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateTime(value) {
+  const date = parseTimestamp(value);
+  if (!date) return escapeHtml(value || "-");
+  return date.toLocaleString("tr-TR", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+}
+
+function formatClock(date) {
+  return date.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function isWithinLast24Hours(value) {
+  const date = parseTimestamp(value);
+  if (!date) return false;
+  const diff = Date.now() - date.getTime();
+  return diff >= -60000 && diff <= 24 * 60 * 60 * 1000;
+}
+
+const SEVERITIES = ["CRITICAL", "HIGH", "WARNING", "INFO", "RESOLVED"];
+
+function normalizeSeverity(raw) {
+  const value = String(raw || "").toUpperCase();
+  return SEVERITIES.includes(value) ? value : "INFO";
+}
+
+function isResolvedLog(log) {
+  const status = String(log.status || "").toLocaleLowerCase("tr");
+  return status === "incelendi" || status === "i̇ncelendi" || normalizeSeverity(log.severity) === "RESOLVED";
+}
+
+function severityCounts() {
+  const counts = { CRITICAL: 0, HIGH: 0, WARNING: 0, INFO: 0, RESOLVED: 0 };
+  state.logs.forEach((log) => {
+    const sev = isResolvedLog(log) ? "RESOLVED" : normalizeSeverity(log.severity);
+    counts[sev] += 1;
+  });
+  return counts;
+}
+
+function localTimestamp(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/* --------------------------------- Toasts --------------------------------- */
+const TOAST_ICONS = { success: "#i-check", error: "#i-alert", warning: "#i-alert", info: "#i-info" };
+
+function toast(message, type = "info", title = "") {
+  const stack = $("toastStack");
+  if (!stack) return;
+
+  const node = document.createElement("div");
+  node.className = `toast ${type}`;
+  node.innerHTML = `
+    <svg><use href="${TOAST_ICONS[type] || TOAST_ICONS.info}"/></svg>
+    <div>${title ? `<strong>${escapeHtml(title)}</strong>` : ""}<span>${escapeHtml(message)}</span></div>
+  `;
+  stack.appendChild(node);
+
+  setTimeout(() => {
+    node.classList.add("hide");
+    setTimeout(() => node.remove(), 220);
+  }, 5200);
+}
+
+/* ------------------------------ Bağlantı durumu --------------------------- */
+function setConnection(stateName, text) {
+  const pill = $("connPill");
+  const label = $("connPillText");
+  const dbStatus = $("statusDb");
+
+  if (pill) pill.className = `conn-pill ${stateName}`;
+  if (label) label.textContent = text;
+
+  const pretty = { online: "Bağlı", offline: "Hata", loading: "Bağlanıyor..." }[stateName] || text;
+  if (dbStatus) dbStatus.textContent = pretty;
+}
+
+function updateStatusbar({ count } = {}) {
+  if (count !== undefined) {
+    const el = $("statusCount");
+    if (el) el.textContent = count;
+  }
+  if (state.lastSync) {
+    const el = $("statusSync");
+    if (el) el.textContent = formatClock(state.lastSync);
+  }
+  const project = $("statusProject");
+  if (project) project.textContent = firebaseConfig.projectId || "-";
+  const syncUser = $("statusUser");
+  if (syncUser) syncUser.textContent = state.user?.email || (state.demo ? "demo modu" : "-");
+}
+
+/* --------------------------- SPA görünüm geçişleri ------------------------ */
+function switchView(name) {
+  const target = VIEW_META[name] ? name : "overview";
+  state.currentView = target;
+
+  document.querySelectorAll(".view-section").forEach((section) => {
+    section.classList.toggle("active", section.dataset.view === target);
+  });
+
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    link.classList.toggle("active", link.dataset.target === target);
+  });
+
+  const meta = VIEW_META[target];
+  const title = $("pageTitle");
+  const subtitle = $("pageSubtitle");
+  if (title) title.textContent = meta.title;
+  if (subtitle) subtitle.textContent = meta.subtitle;
+
+  // Grafikler gizli konumdayken 0 boyutla çizilmiş olabilir → görünür olunca yeniden ölçekle
+  if (target === "overview") {
+    requestAnimationFrame(() => {
+      Object.values(state.charts).forEach((chart) => {
+        if (chart && typeof chart.resize === "function") chart.resize();
       });
-  }
-
-  // 2. Yeni Log Ekleme Formu (Create)
-  const addLogForm = document.getElementById("addLogForm");
-  if (addLogForm) {
-    addLogForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-
-      const newLog = {
-        id: Date.now(), // Silme ve Güncelleme işlemleri için benzersiz kimlik (ID)
-        timestamp: new Date().toISOString().replace("T", " ").substring(0, 19),
-        log_type: document.getElementById("logType").value,
-        source_ip: "192.168.1.99",
-        user: document.getElementById("user").value,
-        details: document.getElementById("details").value,
-        severity: document.getElementById("severity").value,
-        status: "Aktif"
-      };
-
-      currentLogs.unshift(newLog); // En başa ekle
-      saveToLocalStorage();        // Hafızaya kaydet
-      renderLogs();                // Ekranı güncelle
-      addLogForm.reset();
     });
   }
 
-  // Yapay Zeka Özeti Al Butonu
-  const aiBtn = document.getElementById("generateAiSummaryBtn");
-  if (aiBtn) aiBtn.addEventListener("click", generateAiSummary);
+  closeSidebar();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
-  // API Anahtarı Yönetim Butonu (Güncelle / Sıfırla)
-  const apiKeyBtn = document.getElementById("apiKeyBtn");
-  if (apiKeyBtn) apiKeyBtn.addEventListener("click", manageApiKey);
+function bindNavigation() {
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    link.addEventListener("click", () => switchView(link.dataset.target));
+  });
+  document.querySelectorAll("[data-goto]").forEach((btn) => {
+    btn.addEventListener("click", () => switchView(btn.dataset.goto));
+  });
+}
 
-  // 3. Anlık Arama ve Çoklu Filtre Dinleyicileri
-  const searchInput = document.getElementById("searchInput");
-  const filterSeverity = document.getElementById("filterSeverity");
-  const filterStatus = document.getElementById("filterStatus");
-  const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+function openSidebar() {
+  $("sidebar")?.classList.add("open");
+  $("sidebarBackdrop")?.classList.add("open");
+}
 
-  if (searchInput) searchInput.addEventListener("input", renderLogs);
-  if (filterSeverity) filterSeverity.addEventListener("change", renderLogs);
-  if (filterStatus) filterStatus.addEventListener("change", renderLogs);
+function closeSidebar() {
+  $("sidebar")?.classList.remove("open");
+  $("sidebarBackdrop")?.classList.remove("open");
+}
 
-  if (clearFiltersBtn) {
-    clearFiltersBtn.addEventListener("click", () => {
-      if (searchInput) searchInput.value = "";
-      if (filterSeverity) filterSeverity.value = "ALL";
-      if (filterStatus) filterStatus.value = "ALL";
-      renderLogs();
+/* ------------------------------- Modallar --------------------------------- */
+let lastFocusedElement = null;
+
+function openModal(id) {
+  const modal = $(id);
+  if (!modal) return;
+  lastFocusedElement = document.activeElement;
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  const focusTarget = modal.querySelector("input:not([type=hidden]), textarea, select") || modal.querySelector("button");
+  if (focusTarget) setTimeout(() => focusTarget.focus(), 60);
+}
+
+function closeModal(id) {
+  const modal = $(id);
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+  if (!document.querySelector(".modal-backdrop.open")) document.body.style.overflow = "";
+  if (lastFocusedElement && typeof lastFocusedElement.focus === "function") {
+    lastFocusedElement.focus();
+    lastFocusedElement = null;
+  }
+  state.pendingAiRun = false;
+}
+
+function closeAllModals() {
+  document.querySelectorAll(".modal-backdrop.open").forEach((modal) => {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  });
+  document.body.style.overflow = "";
+}
+
+function bindModals() {
+  document.querySelectorAll("[data-close-modal]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      const modal = event.currentTarget.closest(".modal-backdrop");
+      if (modal) closeModal(modal.id);
     });
-  }
-});
+  });
 
-// Tarayıcı Hafızasına (LocalStorage) Kaydetme
-function saveToLocalStorage() {
-  localStorage.setItem("kvkk_logs", JSON.stringify(currentLogs));
+  // Arka plana tıklama ile kapatma (kart içine tıklama kapatmaz)
+  document.querySelectorAll(".modal-backdrop").forEach((modal) => {
+    modal.addEventListener("mousedown", (event) => {
+      if (event.target === modal) closeModal(modal.id);
+    });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (document.querySelector(".modal-backdrop.open")) {
+      closeAllModals();
+    }
+    closeSidebar();
+  });
 }
 
-// Log Silme İşlemi (Delete)
-window.deleteLog = function(id) {
-  if (confirm("Bu log kaydını kalıcı olarak silmek istediğinize emin misiniz?")) {
-    currentLogs = currentLogs.filter(log => log.id !== id);
-    saveToLocalStorage();
-    renderLogs();
+
+/* ------------------------------ Firebase init ----------------------------- */
+function isFirebaseConfigured() {
+  return ["apiKey", "projectId", "appId"].every((key) => {
+    const value = typeof firebaseConfig[key] === "string" ? firebaseConfig[key].trim() : "";
+    return value !== "" && !/^BURAYA/i.test(value);
+  });
+}
+
+async function initFirebase() {
+  if (state.db && state.fb && state.fbAuth) return;
+
+  if (!isFirebaseConfigured()) {
+    throw new Error("firebaseConfig eksik veya geçersiz. app.js içindeki yapılandırmayı kontrol edin.");
   }
+
+  const base = `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}`;
+  const [appMod, firestoreMod, authMod] = await Promise.all([
+    import(`${base}/firebase-app.js`),
+    import(`${base}/firebase-firestore.js`),
+    import(`${base}/firebase-auth.js`)
+  ]);
+
+  const app = appMod.getApps().length ? appMod.getApp() : appMod.initializeApp(firebaseConfig);
+
+  state.fb = firestoreMod;
+  state.db = firestoreMod.getFirestore(app);
+  state.fbAuth = authMod;
+  state.auth = authMod.getAuth(app);
+}
+
+/* --------------------------- Firebase Authentication ---------------------- */
+const AUTH_ERRORS = {
+  "auth/invalid-email": "E-posta adresi geçersiz görünüyor.",
+  "auth/missing-password": "Lütfen parolanızı girin.",
+  "auth/user-not-found": "Bu e-posta ile kayıtlı analist bulunamadı.",
+  "auth/wrong-password": "Parola hatalı. Lütfen tekrar deneyin.",
+  "auth/invalid-credential": "E-posta veya parola hatalı.",
+  "auth/invalid-login-credentials": "E-posta veya parola hatalı.",
+  "auth/email-already-in-use": "Bu e-posta ile zaten bir analist hesabı var. Giriş yapmayı deneyin.",
+  "auth/weak-password": "Parola çok zayıf. En az 6 karakter kullanın.",
+  "auth/too-many-requests": "Çok fazla deneme yapıldı. Lütfen kısa bir süre sonra tekrar deneyin.",
+  "auth/network-request-failed": "Ağ bağlantısı hatası. İnternet bağlantınızı kontrol edin.",
+  "auth/user-disabled": "Bu analist hesabı devre dışı bırakılmış."
 };
 
-// Log Durumu Güncelleme İşlemi (Update)
-window.updateLogStatus = function(id) {
-  const logIndex = currentLogs.findIndex(log => log.id === id);
-  if (logIndex !== -1) {
-    currentLogs[logIndex].status = "İncelendi";
-    currentLogs[logIndex].severity = "RESOLVED"; 
-    saveToLocalStorage();
-    renderLogs();
+function authErrorMessage(error) {
+  const code = String(error?.code || "").toLowerCase();
+  if (AUTH_ERRORS[code]) return AUTH_ERRORS[code];
+
+  if (code.includes("operation-not-allowed") || code.includes("configuration-not-found") || code.includes("admin-restricted-operation")) {
+    return "Firebase Authentication bu projede etkin değil. Firebase Console → Authentication → " +
+      "\"Başlarken\" → Sign-in method bölümünden Email/Password sağlayıcısını etkinleştirin. " +
+      "(Alternatif: aşağıdaki demo modu bağlantısı.)";
   }
-};
-
-// Zaman Filtresi Algoritması: Olayın son 24 saat içinde gerçekleşip gerçekleşmediğini kontrol eder
-function isWithinLast24Hours(timestampStr) {
-  if (!timestampStr) return false;
-
-  // "YYYY-MM-DD HH:mm:ss" formatını ISO standartına uyumlu hale getirmek için boşluğu "T" ile değiştiriyoruz
-  const formattedStr = timestampStr.includes("T") ? timestampStr : timestampStr.replace(" ", "T");
-  const logDate = new Date(formattedStr);
-
-  // Geçersiz tarih kontrolü
-  if (isNaN(logDate.getTime())) return false;
-
-  const now = new Date();
-  const diffInMs = now.getTime() - logDate.getTime();
-  const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
-
-  // 0 ms ile 24 saat arası (küçük saat farkı ve gecikmeler için -60 saniyelik tolerans)
-  return diffInMs >= -60000 && diffInMs <= twentyFourHoursInMs;
+  return error?.message || "Oturum işlemi tamamlanamadı.";
 }
 
-// KPI Metriklerini Hesaplayan ve Ekrana Yansıtan Fonksiyon
-function updateKPIMetrics() {
-  const totalLogs = currentLogs.length;
-
-  // Son 24 saat içinde gerçekleşen CRITICAL ve HIGH seviyesindeki tehditler
-  const riskLogs = currentLogs.filter((log) => {
-    const isThreat = log.severity === "CRITICAL" || log.severity === "HIGH";
-    return isThreat && isWithinLast24Hours(log.timestamp);
-  }).length;
-
-  // İncelenen kayıtlar
-  const resolvedLogs = currentLogs.filter(
-    (log) => log.status === "İncelendi" || log.severity === "RESOLVED"
-  ).length;
-
-  // Bekleyen kayıtlar (İncelenmemiş olanlar)
-  const pendingLogs = Math.max(0, totalLogs - resolvedLogs);
-
-  const totalEl = document.getElementById("kpiTotalLogs");
-  const riskEl = document.getElementById("kpiRiskLogs");
-  const resolvedEl = document.getElementById("kpiResolvedLogs");
-  const pendingEl = document.getElementById("kpiPendingLogs");
-
-  if (totalEl) totalEl.textContent = totalLogs;
-  if (riskEl) riskEl.textContent = riskLogs;
-  if (resolvedEl) resolvedEl.textContent = resolvedLogs;
-  if (pendingEl) pendingEl.textContent = pendingLogs;
+function firstLetter(value) {
+  const text = String(value || "A").trim();
+  return (text.charAt(0) || "A").toLocaleUpperCase("tr");
 }
 
-let severityChart = null;
+function setAuthMode(mode) {
+  state.authMode = mode === "register" ? "register" : "login";
+  const isRegister = state.authMode === "register";
 
-// Logların CRITICAL, HIGH, WARNING, INFO ve RESOLVED oranlarını gösteren Chart.js Halka (Doughnut) grafiği
-function updateSeverityChart() {
-  const canvas = document.getElementById("severityChart");
-  if (!canvas || typeof Chart === "undefined") return;
+  document.querySelectorAll("[data-auth-mode]").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.authMode === state.authMode);
+  });
 
-  const counts = {
-    CRITICAL: 0,
-    HIGH: 0,
-    WARNING: 0,
-    INFO: 0,
-    RESOLVED: 0
-  };
+  const title = $("authTitle");
+  const subtitle = $("authSubtitle");
+  const submitText = $("authSubmitText");
+  const pw2Row = $("authPassword2Row");
+  const pwInput = $("authPassword");
 
-  currentLogs.forEach((log) => {
-    const sev = (log.severity || "").toUpperCase();
-    if (counts.hasOwnProperty(sev)) {
-      counts[sev]++;
+  if (title) title.textContent = isRegister ? "Analist Kaydı Oluştur" : "SOC Analist Girişi";
+  if (subtitle) subtitle.textContent = isRegister
+    ? "Kurumsal e-posta ile yeni bir analist hesabı oluşturun."
+    : "Kurumsal e-posta adresinizle oturum açın.";
+  if (submitText) submitText.textContent = isRegister ? "Kayıt Ol" : "Giriş Yap";
+  pw2Row?.classList.toggle("hidden", !isRegister);
+  if (pwInput) pwInput.setAttribute("autocomplete", isRegister ? "new-password" : "current-password");
+
+  showAuthError("");
+}
+
+function showAuthError(message) {
+  const box = $("authError");
+  if (!box) return;
+  if (!message) {
+    box.classList.remove("show");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.add("show");
+  box.innerHTML = message;
+}
+
+function setAuthBusy(busy, label) {
+  const btn = $("authSubmitBtn");
+  const text = $("authSubmitText");
+  if (!btn) return;
+  btn.disabled = busy;
+  if (text) text.textContent = busy ? label || "İşleniyor..." : (state.authMode === "register" ? "Kayıt Ol" : "Giriş Yap");
+}
+
+/* ----------------------------- Oturum görünümü ---------------------------- */
+function showAuthScreen() {
+  $("appShell")?.classList.add("hidden");
+  $("authScreen")?.classList.remove("hidden");
+}
+
+function showApp() {
+  $("authScreen")?.classList.add("hidden");
+  $("appShell")?.classList.remove("hidden");
+}
+
+function renderSessionUser(user, demo = false) {
+  const email = demo ? "demo@soc.local" : user?.email || "-";
+  const uid = demo ? "demo-session" : user?.uid || "-";
+
+  const emailEl = $("userEmail");
+  const avatarEl = $("userAvatar");
+  const roleEl = $("userRole");
+  if (emailEl) emailEl.textContent = email;
+  if (avatarEl) avatarEl.textContent = firstLetter(email);
+  if (roleEl) roleEl.textContent = demo ? "Demo Modu" : "SOC Analist";
+
+  const sEmail = $("settingsEmail");
+  const sAvatar = $("settingsAvatar");
+  const sUid = $("settingsUid");
+  const sSignIn = $("settingsSignIn");
+  const sVerified = $("settingsVerified");
+  const sProject = $("settingsProject");
+  const sSdk = $("settingsSdk");
+
+  if (sEmail) sEmail.textContent = email;
+  if (sAvatar) sAvatar.textContent = firstLetter(email);
+  if (sUid) sUid.textContent = `UID: ${uid}`;
+  if (sSignIn) {
+    const lastSignIn = user?.metadata?.lastSignInTime;
+    sSignIn.textContent = lastSignIn ? new Date(lastSignIn).toLocaleString("tr-TR") : (demo ? "Demo oturumu" : "-");
+  }
+  if (sVerified) sVerified.textContent = demo ? "Demo modu" : (user?.emailVerified ? "Doğrulandı" : "Doğrulanmadı");
+  if (sProject) sProject.textContent = firebaseConfig.projectId || "-";
+  if (sSdk) sSdk.textContent = `v${FIREBASE_SDK_VERSION}`;
+
+  updateStatusbar();
+}
+
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  if (!state.fbAuth || !state.auth) {
+    showAuthError("Firebase Authentication başlatılamadı. Sayfayı yenileyip tekrar deneyin.");
+    return;
+  }
+
+  const email = ($("authEmail")?.value || "").trim();
+  const password = $("authPassword")?.value || "";
+  const password2 = $("authPassword2")?.value || "";
+
+  if (!email || !password) {
+    showAuthError("E-posta ve parola zorunludur.");
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    showAuthError(AUTH_ERRORS["auth/invalid-email"]);
+    return;
+  }
+  if (state.authMode === "register") {
+    if (password.length < 6) {
+      showAuthError(AUTH_ERRORS["auth/weak-password"]);
+      return;
+    }
+    if (password !== password2) {
+      showAuthError("Girdiğiniz parolalar birbiriyle eşleşmiyor.");
+      return;
+    }
+  }
+
+  const { signInWithEmailAndPassword, createUserWithEmailAndPassword } = state.fbAuth;
+  setAuthBusy(true, state.authMode === "register" ? "Hesap oluşturuluyor..." : "Giriş yapılıyor...");
+  showAuthError("");
+
+  try {
+    const credential = state.authMode === "register"
+      ? await createUserWithEmailAndPassword(state.auth, email, password)
+      : await signInWithEmailAndPassword(state.auth, email, password);
+
+    toast(`${credential.user.email} olarak oturum açıldı.`, "success", "Giriş başarılı");
+  } catch (error) {
+    console.error("Auth hatası:", error);
+    const message = authErrorMessage(error);
+    showAuthError(`<strong>Oturum açılamadı</strong>${escapeHtml(message)}`);
+    const code = String(error?.code || "").toLowerCase();
+    if (code.includes("operation-not-allowed") || code.includes("configuration-not-found") || code.includes("admin-restricted-operation")) {
+      $("authDemoBtn")?.classList.remove("hidden");
+      state.authFailed = true;
+    }
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+function enterDemoMode() {
+  state.demo = true;
+  try { sessionStorage.setItem(DEMO_SESSION_KEY, "1"); } catch (_) { /* yoksay */ }
+  renderSessionUser(null, true);
+  showApp();
+  loadLogs();
+  toast("Demo modunda çalışıyorsunuz. Oturum kalıcı değildir.", "warning", "Demo modu");
+}
+
+async function handleLogout() {
+  try {
+    if (state.fbAuth && state.auth && state.user) {
+      await state.fbAuth.signOut(state.auth);
+    }
+  } catch (error) {
+    console.error("Çıkış hatası:", error);
+  }
+  state.demo = false;
+  state.user = null;
+  try { sessionStorage.removeItem(DEMO_SESSION_KEY); } catch (_) { /* yoksay */ }
+
+  state.logs = [];
+  state.view = [];
+  Object.keys(state.charts).forEach((key) => {
+    if (state.charts[key] && typeof state.charts[key].destroy === "function") {
+      state.charts[key].destroy();
+      state.charts[key] = null;
     }
   });
 
-  const chartData = [
-    counts.CRITICAL,
-    counts.HIGH,
-    counts.WARNING,
-    counts.INFO,
-    counts.RESOLVED
-  ];
+  showAuthScreen();
+  setConnection("loading", "Bağlanıyor...");
+  toast("Oturum kapatıldı.", "info", "Çıkış yapıldı");
+}
 
-  if (!severityChart) {
-    const ctx = canvas.getContext("2d");
-    severityChart = new Chart(ctx, {
+async function initAuth() {
+  try {
+    await initFirebase();
+  } catch (error) {
+    console.error("Firebase başlatma hatası:", error);
+    showAuthScreen();
+    state.authReady = true;
+    state.authFailed = true;
+    showAuthError(`<strong>Firebase başlatılamadı</strong>${escapeHtml(error.message)}`);
+    $("authDemoBtn")?.classList.remove("hidden");
+    return;
+  }
+
+  const { onAuthStateChanged } = state.fbAuth;
+
+  // Auth yapılandırması eksikse onAuthStateChanged hiç tetiklenmeyebilir:
+  // 6 saniye içinde oturum durumu gelmezse kullanıcıyı bilgilendir.
+  const authTimeout = setTimeout(() => {
+    if (state.authReady) return;
+    state.authReady = true;
+    state.authFailed = true;
+    showAuthScreen();
+    showAuthError(
+      "<strong>Oturum durumu alınamadı</strong>Firebase Authentication bu projede etkin olmayabilir. " +
+      "Firebase Console → Authentication → Sign-in method bölümünden Email/Password sağlayıcısını etkinleştirin."
+    );
+    $("authDemoBtn")?.classList.remove("hidden");
+  }, 6000);
+
+  // onAuthStateChanged: oturum varsa panel, yoksa giriş ekranı
+  onAuthStateChanged(state.auth, (user) => {
+    clearTimeout(authTimeout);
+    state.authReady = true;
+    state.user = user || null;
+
+    if (user) {
+      state.demo = false;
+      try { sessionStorage.removeItem(DEMO_SESSION_KEY); } catch (_) { /* yoksay */ }
+      renderSessionUser(user, false);
+      showApp();
+      loadLogs();
+      return;
+    }
+
+    let demoFlag = false;
+    try { demoFlag = sessionStorage.getItem(DEMO_SESSION_KEY) === "1"; } catch (_) { /* yoksay */ }
+
+    if (demoFlag) {
+      state.demo = true;
+      renderSessionUser(null, true);
+      showApp();
+      loadLogs();
+      return;
+    }
+
+    renderSessionUser(null, false);
+    showAuthScreen();
+  }, (error) => {
+    clearTimeout(authTimeout);
+    console.error("Oturum dinleme hatası:", error);
+    state.authReady = true;
+    showAuthScreen();
+    showAuthError(`<strong>Oturum hatası</strong>${escapeHtml(authErrorMessage(error))}`);
+  });
+}
+
+
+/* ------------------------------- Firestore CRUD ---------------------------- */
+async function ensureFirestore() {
+  if (!state.db || !state.fb) await initFirebase();
+}
+
+async function fetchLogs() {
+  await ensureFirestore();
+  const { collection, query, orderBy, getDocs } = state.fb;
+  const snapshot = await getDocs(query(collection(state.db, LOGS_COLLECTION), orderBy("timestamp", "desc")));
+  return snapshot.docs.map((docSnap) => ({ ...(docSnap.data() || {}), id: docSnap.id }));
+}
+
+async function seedLogsIfEmpty() {
+  await ensureFirestore();
+  const { collection, query, limit, getDocs, addDoc } = state.fb;
+
+  const probe = await getDocs(query(collection(state.db, LOGS_COLLECTION), limit(1)));
+  if (!probe.empty) return 0;
+
+  let records = [];
+  try {
+    const response = await fetch(SEED_FILE, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    records = Array.isArray(payload) ? payload : payload.logs || [];
+  } catch (error) {
+    console.warn("Başlangıç verisi okunamadı:", error);
+    return 0;
+  }
+
+  let imported = 0;
+  for (const record of records) {
+    if (!record || typeof record !== "object") continue;
+    const { id, ...data } = record;
+    if (!Object.keys(data).length) continue;
+    await addDoc(collection(state.db, LOGS_COLLECTION), {
+      ...data,
+      status: data.status || "Aktif",
+      seeded: true
+    });
+    imported += 1;
+  }
+  return imported;
+}
+
+async function loadLogs({ silent = false } = {}) {
+  if (!silent) {
+    setConnection("loading", "Bağlanıyor...");
+    ["logTbody", "recentTbody"].forEach((id) => {
+      const tbody = $(id);
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><span class="spinner"></span><p>Firestore kayıtları yükleniyor...</p></div></td></tr>`;
+      }
+    });
+  }
+
+  try {
+    await ensureFirestore();
+    const imported = await seedLogsIfEmpty();
+    state.logs = await fetchLogs();
+    state.lastSync = new Date();
+
+    renderAll();
+    setConnection("online", `Canlı • ${state.logs.length} kayıt`);
+    updateStatusbar({ count: state.logs.length });
+
+    if (!silent) {
+      toast(
+        imported > 0
+          ? `Firestore'a ${imported} başlangıç kaydı (logs.json) aktarıldı.`
+          : `${state.logs.length} kayıt Firestore'dan yüklendi.`,
+        "success",
+        "Firestore bağlı"
+      );
+    }
+  } catch (error) {
+    console.error("Firestore yükleme hatası:", error);
+    state.logs = [];
+    state.view = [];
+    renderAll();
+    setConnection("offline", "Bağlantı hatası");
+    updateStatusbar({ count: 0 });
+
+    const detail = `${escapeHtml(error.message)}<br><small>Firebase proje ayarlarını, Firestore güvenlik kurallarını ve oturum yetkilerini kontrol edin.</small>`;
+    ["logTbody", "recentTbody"].forEach((id) => {
+      const tbody = $(id);
+      if (!tbody) return;
+      tbody.innerHTML = `
+        <tr><td colspan="9">
+          <div class="empty-state">
+            <svg><use href="#i-alert"/></svg>
+            <h3>Firestore bağlantısı kurulamadı</h3>
+            <p>${detail}</p>
+          </div>
+        </td></tr>`;
+    });
+    toast(error.message, "error", "Bağlantı hatası");
+  }
+}
+
+async function createLog(payload) {
+  await ensureFirestore();
+  const { collection, addDoc } = state.fb;
+  const ref = await addDoc(collection(state.db, LOGS_COLLECTION), payload);
+  return ref.id;
+}
+
+async function markLogResolved(id) {
+  await ensureFirestore();
+  const { doc, updateDoc } = state.fb;
+  await updateDoc(doc(state.db, LOGS_COLLECTION, String(id)), { status: "İncelendi", severity: "RESOLVED" });
+}
+
+async function deleteLogRecord(id) {
+  await ensureFirestore();
+  const { doc, deleteDoc } = state.fb;
+  await deleteDoc(doc(state.db, LOGS_COLLECTION, String(id)));
+}
+
+/* ------------------------- Rozet / hücre biçimlendirme -------------------- */
+const ACTION_CLASSES = {
+  ALLOW: "allow",
+  BLOCK: "block",
+  ALERT: "alert",
+  FAILED_LOGIN: "failed-login"
+};
+
+function actionBadge(action) {
+  const label = String(action || "N/A").toUpperCase();
+  const cls = ACTION_CLASSES[label] || "other";
+  return `<span class="badge-action ${cls}">${escapeHtml(label)}</span>`;
+}
+
+function severityBadge(log) {
+  const resolved = isResolvedLog(log);
+  const sev = resolved ? "RESOLVED" : normalizeSeverity(log.severity);
+  return `<span class="tag ${sev.toLowerCase()}">${escapeHtml(resolved ? "ÇÖZÜLDÜ" : sev)}</span>`;
+}
+
+function statusBadge(log) {
+  return isResolvedLog(log)
+    ? `<span class="tag resolved">İncelendi</span>`
+    : `<span class="tag info">Aktif</span>`;
+}
+
+// Kaynak → Hedef: ok ile ayrılmış, tek satır ve taşmaz
+function ipCell(log) {
+  const source = String(log.source_ip || "").trim();
+  const dest = String(log.destination_ip || "").trim();
+
+  const sourceHtml = source
+    ? `<span class="ip">${escapeHtml(source)}</span>`
+    : `<span class="ip-empty">-</span>`;
+
+  if (!dest) return `<span class="ip-cell">${sourceHtml}</span>`;
+
+  return `<span class="ip-cell">${sourceHtml}<span class="ip-arrow">→</span><span class="ip dest">${escapeHtml(dest)}</span></span>`;
+}
+
+/* --------------------------------- KPI kartları --------------------------- */
+function renderKPIs() {
+  const total = state.logs.length;
+  const last24 = state.logs.filter((log) => isWithinLast24Hours(log.timestamp)).length;
+  const threat = state.logs.filter((log) => {
+    const sev = normalizeSeverity(log.severity);
+    return !isResolvedLog(log) && (sev === "CRITICAL" || sev === "HIGH") && isWithinLast24Hours(log.timestamp);
+  }).length;
+  const resolved = state.logs.filter(isResolvedLog).length;
+  const pending = Math.max(0, total - resolved);
+
+  const set = (id, value) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  };
+  set("kpiTotal", total);
+  set("kpiLast24", last24);
+  set("kpiThreat", threat);
+  set("kpiResolved", resolved);
+  set("kpiPending", pending);
+
+  const hint = $("kpiTotalHint");
+  if (hint) hint.innerHTML = `Firestore <span class="mono">${escapeHtml(firebaseConfig.projectId)}/logs</span>`;
+
+  const info = $("logSectionInfo");
+  if (info) info.textContent = `Toplam ${total} kayıt • ${state.view.length} kayıt listeleniyor`;
+
+  const badge = $("navThreatCount");
+  if (badge) badge.textContent = String(threat);
+}
+
+/* ---------------------------------- Grafikler ----------------------------- */
+function ensureChartDefaults() {
+  if (typeof Chart === "undefined") return false;
+  Chart.defaults.color = "#93a4c0";
+  Chart.defaults.font.family = '"Segoe UI", Inter, system-ui, sans-serif';
+  Chart.defaults.font.size = 11;
+  Chart.defaults.borderColor = "rgba(34, 48, 74, 0.65)";
+  return true;
+}
+
+function tooltipBase() {
+  return {
+    backgroundColor: "#0b1422",
+    borderColor: "#22304a",
+    borderWidth: 1,
+    padding: 10,
+    titleColor: "#e8eefb",
+    bodyColor: "#93a4c0"
+  };
+}
+
+function renderSeverityChart() {
+  const canvas = $("chartSeverity");
+  if (!canvas || !ensureChartDefaults()) return;
+
+  const counts = severityCounts();
+  const labels = ["CRITICAL", "HIGH", "WARNING", "INFO", "RESOLVED"];
+  const data = labels.map((label) => counts[label] || 0);
+  const palette = { CRITICAL: "#f43f5e", HIGH: "#fb923c", WARNING: "#facc15", INFO: "#38bdf8", RESOLVED: "#22c55e" };
+
+  if (!state.charts.severity) {
+    state.charts.severity = new Chart(canvas.getContext("2d"), {
       type: "doughnut",
       data: {
-        labels: ["CRITICAL", "HIGH", "WARNING", "INFO", "RESOLVED"],
-        datasets: [
-          {
-            label: "Kayıt Sayısı",
-            data: chartData,
-            backgroundColor: [
-              "#ef4444", // CRITICAL (Kırmızı)
-              "#f97316", // HIGH (Turuncu)
-              "#eab308", // WARNING (Sarı)
-              "#3b82f6", // INFO (Mavi)
-              "#10b981"  // RESOLVED (Yeşil)
-            ],
-            borderWidth: 2,
-            borderColor: "#ffffff"
-          }
-        ]
+        labels,
+        datasets: [{
+          label: "Kayıt",
+          data,
+          backgroundColor: labels.map((label) => palette[label]),
+          borderColor: "#0b1422",
+          borderWidth: 3,
+          hoverOffset: 6
+        }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        cutout: "66%",
         plugins: {
-          legend: {
-            position: "bottom",
-            labels: {
-              boxWidth: 12,
-              padding: 10,
-              font: {
-                size: 11
-              }
-            }
-          }
-        },
-        cutout: "65%"
+          legend: { position: "bottom", labels: { boxWidth: 10, padding: 12, usePointStyle: true, pointStyle: "circle" } },
+          tooltip: tooltipBase()
+        }
       }
     });
-  } else {
-    // CRUD işlemleri sonrası grafiğin anlık güncellenmesi
-    severityChart.data.datasets[0].data = chartData;
-    severityChart.update();
+    return;
   }
+
+  state.charts.severity.data.datasets[0].data = data;
+  state.charts.severity.update();
 }
 
-let dailyDensityChart = null;
+function renderDailyChart() {
+  const canvas = $("chartDaily");
+  if (!canvas || !ensureChartDefaults()) return;
 
-// Tarihlere göre log kayıtlarını gruplayan veri agregasyonu (reduce) ve Günlük Log Yoğunluğu Grafiği
-function updateDailyDensityChart() {
-  const canvas = document.getElementById("dailyDensityChart");
-  if (!canvas || typeof Chart === "undefined") return;
-
-  // currentLogs dizisindeki kayıtları tarihlere göre gruplayan veri agregasyonu (reduce)
-  const dateCounts = currentLogs.reduce((acc, log) => {
-    if (!log.timestamp) return acc;
-    // Zaman damgasından gün bilgisini ("YYYY-MM-DD") alıyoruz
-    const dateKey = log.timestamp.substring(0, 10);
-    acc[dateKey] = (acc[dateKey] || 0) + 1;
+  const counts = state.logs.reduce((acc, log) => {
+    const date = parseTimestamp(log.timestamp);
+    if (!date) return acc;
+    const key = date.toISOString().slice(0, 10);
+    acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
 
-  // Tarihleri kronolojik sıraya diziyoruz
-  const labels = Object.keys(dateCounts).sort();
-  const data = labels.map((date) => dateCounts[date]);
+  const labels = Object.keys(counts).sort();
+  const data = labels.map((key) => counts[key]);
 
-  if (!dailyDensityChart) {
-    const ctx = canvas.getContext("2d");
-    dailyDensityChart = new Chart(ctx, {
+  if (!state.charts.daily) {
+    state.charts.daily = new Chart(canvas.getContext("2d"), {
       type: "bar",
       data: {
-        labels: labels,
-        datasets: [
-          {
-            label: "Günlük Log Yoğunluğu",
-            data: data,
-            backgroundColor: "rgba(37, 99, 235, 0.75)",
-            borderColor: "#2563eb",
-            borderWidth: 1.5,
-            borderRadius: 6
-          }
-        ]
+        labels,
+        datasets: [{
+          label: "Olay sayısı",
+          data,
+          backgroundColor: "rgba(56, 189, 248, 0.55)",
+          hoverBackgroundColor: "rgba(56, 189, 248, 0.85)",
+          borderColor: "#38bdf8",
+          borderWidth: 1,
+          borderRadius: 6,
+          maxBarThickness: 38
+        }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            callbacks: {
-              label: (context) => ` Toplam Olay: ${context.parsed.y}`
-            }
-          }
+          legend: { display: false },
+          tooltip: { ...tooltipBase(), callbacks: { label: (ctx) => ` ${ctx.parsed.y} olay` } }
         },
         scales: {
-          y: {
-            beginAtZero: true,
-            ticks: {
-              stepSize: 1,
-              precision: 0
-            },
-            grid: {
-              color: "#f1f5f9"
-            }
-          },
-          x: {
-            grid: {
-              display: false
-            }
-          }
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+          y: { beginAtZero: true, ticks: { precision: 0, stepSize: 1 }, grid: { color: "rgba(34, 48, 74, 0.45)" } }
         }
       }
     });
-  } else {
-    // CRUD işlemleri sonrası grafiğin anlık güncellenmesi
-    dailyDensityChart.data.labels = labels;
-    dailyDensityChart.data.datasets[0].data = data;
-    dailyDensityChart.update();
+    return;
   }
+
+  state.charts.daily.data.labels = labels;
+  state.charts.daily.data.datasets[0].data = data;
+  state.charts.daily.update();
 }
 
-// Gelişmiş Arama ve Çoklu Filtreleme Mantığı
-function getFilteredLogs() {
-  const searchInput = document.getElementById("searchInput");
-  const filterSeverity = document.getElementById("filterSeverity");
-  const filterStatus = document.getElementById("filterStatus");
+function renderTypeChart() {
+  const canvas = $("chartType");
+  if (!canvas || !ensureChartDefaults()) return;
 
-  const query = searchInput ? searchInput.value.trim().toLowerCase() : "";
-  const selectedSeverity = filterSeverity ? filterSeverity.value : "ALL";
-  const selectedStatus = filterStatus ? filterStatus.value : "ALL";
+  const counts = state.logs.reduce((acc, log) => {
+    const key = log.log_type || "BILINMEYEN";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
 
-  return currentLogs.filter((log) => {
-    // 1. Arama Çubuğu: Kullanıcı adı, IP adresi (kaynak/hedef) ve Olay açıklaması
-    if (query) {
-      const user = (log.user || "").toLowerCase();
-      const sourceIp = (log.source_ip || "").toLowerCase();
-      const destIp = (log.destination_ip || "").toLowerCase();
-      const details = (log.details || "").toLowerCase();
+  const labels = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const data = labels.map((key) => counts[key]);
 
-      const matches =
-        user.includes(query) ||
-        sourceIp.includes(query) ||
-        destIp.includes(query) ||
-        details.includes(query);
+  if (!state.charts.type) {
+    state.charts.type = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          label: "Kayıt",
+          data,
+          backgroundColor: "rgba(167, 139, 250, 0.55)",
+          hoverBackgroundColor: "rgba(167, 139, 250, 0.85)",
+          borderColor: "#a78bfa",
+          borderWidth: 1,
+          borderRadius: 6,
+          maxBarThickness: 26
+        }]
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { ...tooltipBase(), callbacks: { label: (ctx) => ` ${ctx.parsed.x} kayıt` } }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0, stepSize: 1 }, grid: { color: "rgba(34, 48, 74, 0.45)" } },
+          y: { grid: { display: false } }
+        }
+      }
+    });
+    return;
+  }
 
-      if (!matches) return false;
+  state.charts.type.data.labels = labels;
+  state.charts.type.data.datasets[0].data = data;
+  state.charts.type.update();
+}
+
+
+/* ---------------------------------- Filtreler ----------------------------- */
+function applyFilters() {
+  const { query, severity, status, type } = state.filters;
+  const needle = query.trim().toLowerCase();
+
+  state.view = state.logs.filter((log) => {
+    if (needle) {
+      const haystack = [
+        log.user, log.source_ip, log.destination_ip, log.details,
+        log.log_type, log.action, log.mac_address
+      ].map((value) => String(value || "").toLowerCase()).join(" ");
+      if (!haystack.includes(needle)) return false;
     }
 
-    // 2. Önem Seviyesi Filtresi (CRITICAL, HIGH, WARNING, INFO, RESOLVED)
-    if (selectedSeverity !== "ALL") {
-      const logSev = (log.severity || "").toUpperCase();
-      if (logSev !== selectedSeverity) return false;
+    if (severity !== "ALL") {
+      const sev = isResolvedLog(log) ? "RESOLVED" : normalizeSeverity(log.severity);
+      if (sev !== severity) return false;
     }
 
-    // 3. İnceleme Durumu Filtresi (İncelenen veya Bekleyen)
-    const isResolved = log.status === "İncelendi" || log.severity === "RESOLVED";
-    if (selectedStatus === "RESOLVED" && !isResolved) return false;
-    if (selectedStatus === "PENDING" && isResolved) return false;
+    if (status !== "ALL") {
+      const resolved = isResolvedLog(log);
+      if (status === "RESOLVED" && !resolved) return false;
+      if (status === "PENDING" && resolved) return false;
+    }
+
+    if (type !== "ALL" && String(log.log_type || "") !== type) return false;
 
     return true;
   });
+
+  const info = $("filterInfo");
+  const active = Boolean(needle) || severity !== "ALL" || status !== "ALL" || type !== "ALL";
+  if (info) {
+    info.classList.toggle("show", active);
+    info.innerHTML = active
+      ? `🔍 <b>Filtre aktif:</b> toplam <b>${state.logs.length}</b> kayıttan <b>${state.view.length}</b> kayıt gösteriliyor.`
+      : "";
+  }
 }
 
-// Logları Ekrana Basan Fonksiyon
-function renderLogs() {
-  updateKPIMetrics();
-  updateSeverityChart();
-  updateDailyDensityChart();
-  const container = document.getElementById("logContainer");
-  if (!container) return;
-  container.innerHTML = "";
+/* ------------------------------------ Tablo ------------------------------- */
+function renderTable() {
+  const tbody = $("logTbody");
+  if (!tbody) return;
 
-  const filteredLogs = getFilteredLogs();
-
-  // Filtre durum bilgisini güncelle (Örn: "5 kayıttan 2'si listeleniyor")
-  const resultInfo = document.getElementById("filterResultInfo");
-  const searchInput = document.getElementById("searchInput");
-  const filterSeverity = document.getElementById("filterSeverity");
-  const filterStatus = document.getElementById("filterStatus");
-
-  const isFilterActive =
-    (searchInput && searchInput.value.trim() !== "") ||
-    (filterSeverity && filterSeverity.value !== "ALL") ||
-    (filterStatus && filterStatus.value !== "ALL");
-
-  if (resultInfo) {
-    if (isFilterActive) {
-      resultInfo.style.display = "block";
-      resultInfo.innerHTML = `🔍 <b>Filtre Aktif:</b> Toplam <b>${currentLogs.length}</b> kayıttan <b>${filteredLogs.length}</b> kayıt gösteriliyor.`;
-    } else {
-      resultInfo.style.display = "none";
-    }
-  }
-
-  if (currentLogs.length === 0) {
-    container.innerHTML = "<p>Henüz kayıtlı log bulunmuyor.</p>";
+  if (!state.logs.length) {
+    tbody.innerHTML = `
+      <tr><td colspan="9">
+        <div class="empty-state">
+          <svg><use href="#i-inbox"/></svg>
+          <h3>Henüz log kaydı yok</h3>
+          <p>Firestore <span class="mono">logs</span> koleksiyonu boş. “Yeni Log” butonuyla ilk kaydı oluşturabilirsiniz.</p>
+        </div>
+      </td></tr>`;
     return;
   }
 
-  if (filteredLogs.length === 0) {
-    container.innerHTML = `
-      <div style="background: #fff; padding: 25px; border-radius: 6px; text-align: center; color: #64748b; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-        <p style="font-size: 1.1rem; margin-top:0; margin-bottom: 5px; color: #334155;">⚠️ <b>Eşleşen log kaydı bulunamadı.</b></p>
-        <small>Arama teriminizi veya seçtiğiniz önem/durum filtrelerini değiştirmeyi deneyebilirsiniz.</small>
-      </div>
-    `;
+  if (!state.view.length) {
+    tbody.innerHTML = `
+      <tr><td colspan="9">
+        <div class="empty-state">
+          <svg><use href="#i-search"/></svg>
+          <h3>Eşleşen kayıt bulunamadı</h3>
+          <p>Arama terimini veya seçili filtreleri değiştirmeyi deneyin.</p>
+        </div>
+      </td></tr>`;
     return;
   }
 
-  filteredLogs.forEach((log) => {
-    const div = document.createElement("div");
-    const isResolved = log.severity === "RESOLVED";
-    div.className = `log-card ${log.severity}`;
-    
-    // Çözülmüş loglar için görsel geribildirim (Yeşil çerçeve)
-    div.style.border = isResolved ? "2px solid #4CAF50" : "";
-    div.style.padding = "10px";
-    div.style.marginBottom = "10px";
-    div.style.borderRadius = "5px";
+  tbody.innerHTML = state.view.map((log) => {
+    const id = escapeHtml(log.id);
+    const resolved = isResolvedLog(log);
+    return `
+      <tr>
+        <td class="cell-time">${formatDateTime(log.timestamp)}</td>
+        <td><span class="tag type">${escapeHtml(log.log_type || "-")}</span></td>
+        <td class="cell-user">${escapeHtml(log.user || "-")}</td>
+        <td>${actionBadge(log.action)}</td>
+        <td>${ipCell(log)}</td>
+        <td>${severityBadge(log)}</td>
+        <td>${statusBadge(log)}</td>
+        <td class="cell-details">${escapeHtml(log.details || "-")}</td>
+        <td class="cell-actions">
+          <span class="row-actions">
+            ${resolved
+              ? `<span class="tag resolved">✓ Onaylandı</span>`
+              : `<button class="btn btn-sm btn-ok" type="button" data-action="resolve" data-id="${id}" title="İncelendi olarak işaretle">
+                   <svg><use href="#i-check"/></svg> İncelendi
+                 </button>`}
+            <button class="btn btn-sm btn-danger" type="button" data-action="delete" data-id="${id}" title="Kaydı sil" aria-label="Kaydı sil">
+              <svg><use href="#i-trash"/></svg>
+            </button>
+          </span>
+        </td>
+      </tr>`;
+  }).join("");
+}
 
-    div.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: start;">
-        <div>
-          <strong>[${log.timestamp}] - ${log.log_type}</strong> (Kullanıcı: <b>${log.user}</b>)<br>
-          <span>${log.details}</span> <br>
-          <small>Önem Seviyesi: <b style="color: ${isResolved ? '#4CAF50' : 'inherit'}">${isResolved ? "ÇÖZÜLDÜ" : log.severity}</b> | Kaynak IP: ${log.source_ip}${log.destination_ip ? ` ➔ Hedef IP: ${log.destination_ip}` : ''}</small>
-        </div>
-        <div>
-          ${!isResolved ? `<button onclick="updateLogStatus(${log.id})" style="background-color:#4CAF50; color:white; border:none; padding:5px 10px; cursor:pointer; margin-right:5px; border-radius:3px;">✓ İncelendi</button>` : `<span style="color:#4CAF50; font-weight:bold; margin-right:10px;">✓ Onaylandı</span>`}
-          <button onclick="deleteLog(${log.id})" style="background-color:#f44336; color:white; border:none; padding:5px 10px; cursor:pointer; border-radius:3px;">X Sil</button>
-        </div>
-      </div>
-    `;
-    container.appendChild(div);
+// Genel Bakış: son 5 kritik/güncel kayıt
+function renderRecent() {
+  const tbody = $("recentTbody");
+  if (!tbody) return;
+
+  const prioritized = [...state.logs].sort((a, b) => {
+    const rank = (log) => {
+      const sev = normalizeSeverity(log.severity);
+      if (isResolvedLog(log)) return 3;
+      if (sev === "CRITICAL") return 0;
+      if (sev === "HIGH") return 1;
+      return 2;
+    };
+    const diff = rank(a) - rank(b);
+    if (diff !== 0) return diff;
+    const da = parseTimestamp(a.timestamp)?.getTime() || 0;
+    const dbTime = parseTimestamp(b.timestamp)?.getTime() || 0;
+    return dbTime - da;
+  }).slice(0, 5);
+
+  if (!prioritized.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Gösterilecek kayıt bulunmuyor.</p></div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = prioritized.map((log) => `
+    <tr>
+      <td class="cell-time">${formatDateTime(log.timestamp)}</td>
+      <td><span class="tag type">${escapeHtml(log.log_type || "-")}</span></td>
+      <td class="cell-user">${escapeHtml(log.user || "-")}</td>
+      <td>${actionBadge(log.action)}</td>
+      <td>${ipCell(log)}</td>
+      <td>${severityBadge(log)}</td>
+      <td class="cell-details">${escapeHtml(log.details || "-")}</td>
+    </tr>`).join("");
+}
+
+
+/* ------------------------------- Tehdit durumu ---------------------------- */
+function pendingThreats() {
+  return state.logs.filter((log) => {
+    const sev = normalizeSeverity(log.severity);
+    return !isResolvedLog(log) && (sev === "CRITICAL" || sev === "HIGH");
   });
 }
 
-// -----------------------------
-// Gemini API Anahtarı Yönetimi (BYOK - Bring Your Own Key)
-// Anahtar kod içinde tutulmaz; yalnızca kullanıcının kendi tarayıcısında (localStorage) saklanır.
-// -----------------------------
-const GEMINI_API_KEY_STORAGE_KEY = "gemini_api_key";
+function renderThreats() {
+  const threats = pendingThreats();
+  const critical = threats.filter((log) => normalizeSeverity(log.severity) === "CRITICAL").length;
+  const high = threats.length - critical;
+  const resolvedThreats = state.logs.filter((log) => {
+    const sev = normalizeSeverity(log.severity);
+    return isResolvedLog(log) && (sev === "RESOLVED" || sev === "CRITICAL" || sev === "HIGH");
+  }).length;
 
-// Kayıtlı anahtarı temizlenmiş (trim) hâliyle döndürür, yoksa boş string döner
+  const set = (id, value) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  };
+  set("threatCritical", critical);
+  set("threatHigh", high);
+  set("threatTotal", threats.length);
+  set("threatResolved", resolvedThreats);
+
+  const list = $("threatList");
+  if (!list) return;
+
+  if (!threats.length) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <svg><use href="#i-shield"/></svg>
+        <h3>Açık kritik tehdit yok</h3>
+        <p>CRITICAL veya HIGH seviyesinde bekleyen kayıt bulunmuyor. Tüm yüksek öncelikli olaylar incelenmiş görünüyor.</p>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = threats.map((log) => {
+    const sev = normalizeSeverity(log.severity);
+    const id = escapeHtml(log.id);
+    return `
+      <article class="threat-item ${sev.toLowerCase()}">
+        <span class="threat-icon"><svg><use href="#i-alert"/></svg></span>
+        <div class="threat-main">
+          <strong>${escapeHtml(log.details || "Açıklama bulunmuyor")}</strong>
+          <div class="threat-meta">
+            <span class="tag ${sev.toLowerCase()}">${escapeHtml(sev)}</span>
+            <span>${escapeHtml(log.log_type || "-")}</span>
+            <span>${escapeHtml(log.user || "-")}</span>
+            <span>${formatDateTime(log.timestamp)}</span>
+            <span>${ipCell(log)}</span>
+          </div>
+        </div>
+        <div class="threat-actions">
+          <button class="btn btn-sm btn-ok" type="button" data-action="resolve" data-id="${id}">
+            <svg><use href="#i-check"/></svg> İncelendi
+          </button>
+          <button class="btn btn-sm btn-danger" type="button" data-action="delete" data-id="${id}" aria-label="Kaydı sil">
+            <svg><use href="#i-trash"/></svg>
+          </button>
+        </div>
+      </article>`;
+  }).join("");
+}
+
+/* ------------------------------ KVKK uyumluluk ---------------------------- */
+function renderCompliance() {
+  const total = state.logs.length;
+  const withTimestamp = state.logs.filter((log) => parseTimestamp(log.timestamp)).length;
+  const kvkkLogs = state.logs.filter((log) => String(log.log_type || "").startsWith("KVKK"));
+  const dlpAlerts = state.logs.filter((log) =>
+    String(log.log_type || "") === "KVKK_DLP" && String(log.action || "").toUpperCase() === "ALERT"
+  );
+  const resolved = state.logs.filter(isResolvedLog).length;
+
+  const tsRate = total ? Math.round((withTimestamp / total) * 100) : 0;
+  const resolveRate = total ? Math.round((resolved / total) * 100) : 0;
+
+  const set = (id, value) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  };
+  set("cmpTimestamp", `${tsRate}%`);
+  set("cmpKvkk", kvkkLogs.length);
+  set("cmpDlp", dlpAlerts.length);
+  set("cmpRate", `${resolveRate}%`);
+
+  // Denetim kontrol listesi
+  const checklist = $("complianceChecklist");
+  if (checklist) {
+    const items = [
+      {
+        status: total > 0 && tsRate === 100 ? "pass" : total === 0 ? "warn" : "fail",
+        title: "5651 — Zaman damgası bütünlüğü",
+        text: total === 0
+          ? "Değerlendirme için kayıt bulunmuyor."
+          : `${withTimestamp}/${total} kayıtta geçerli timestamp mevcut (${tsRate}%).`
+      },
+      {
+        status: kvkkLogs.length > 0 ? "pass" : "warn",
+        title: "KVKK — Veri erişim kayıtları",
+        text: kvkkLogs.length > 0
+          ? `${kvkkLogs.length} KVKK kapsamlı erişim/DLP kaydı tutuluyor.`
+          : "KVKK kapsamında erişim kaydı bulunamadı."
+      },
+      {
+        status: dlpAlerts.length === 0 ? "pass" : "warn",
+        title: "KVKK — Veri dışa aktarma alarmı",
+        text: dlpAlerts.length === 0
+          ? "Bekleyen veri dışa aktarma alarmı yok."
+          : `${dlpAlerts.length} DLP alarmı inceleme bekliyor.`
+      },
+      {
+        status: resolveRate >= 70 ? "pass" : resolveRate >= 40 ? "warn" : "fail",
+        title: "Olay müdahale oranı",
+        text: `İncelenme oranı ${resolveRate}% (${resolved}/${total}). Hedef: %70 ve üzeri.`
+      },
+      {
+        status: pendingThreats().length === 0 ? "pass" : "warn",
+        title: "Açık kritik tehdit kontrolü",
+        text: pendingThreats().length === 0
+          ? "CRITICAL/HIGH bekleyen tehdit yok."
+          : `${pendingThreats().length} adet yüksek öncelikli olay müdahale bekliyor.`
+      }
+    ];
+
+    const iconOf = (status) => (status === "pass" ? "#i-check" : status === "fail" ? "#i-close" : "#i-info");
+
+    checklist.innerHTML = items.map((item) => `
+      <li class="${item.status}">
+        <span class="check-icon"><svg><use href="${iconOf(item.status)}"/></svg></span>
+        <span><strong>${escapeHtml(item.title)}</strong>${escapeHtml(item.text)}</span>
+      </li>`).join("");
+  }
+
+  // Son KVKK erişim hareketleri
+  const tbody = $("kvkkTbody");
+  if (tbody) {
+    const recent = kvkkLogs.slice(0, 6);
+    tbody.innerHTML = recent.length
+      ? recent.map((log) => `
+          <tr>
+            <td class="cell-time">${formatDateTime(log.timestamp)}</td>
+            <td class="cell-user">${escapeHtml(log.user || "-")}</td>
+            <td>${actionBadge(log.action)}</td>
+            <td>${severityBadge(log)}</td>
+          </tr>`).join("")
+      : `<tr><td colspan="4"><div class="empty-state"><p>KVKK kapsamında kayıt bulunmuyor.</p></div></td></tr>`;
+  }
+}
+
+
+/* ------------------------------- AI kapsam özeti -------------------------- */
+function renderAiScope() {
+  const counts = severityCounts();
+  const pending = state.logs.filter((log) => !isResolvedLog(log)).length;
+  const latest = state.logs[0];
+  const set = (id, value) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  };
+
+  set("scopeTotal", state.logs.length);
+  set("scopeThreats", counts.CRITICAL + counts.HIGH);
+  set("scopePending", pending);
+  set("scopeLatest", latest ? formatDateTime(latest.timestamp) : "-");
+}
+
+/* ------------------------------- Tüm render ------------------------------- */
+function renderAll() {
+  applyFilters();
+  renderKPIs();
+  renderSeverityChart();
+  renderDailyChart();
+  renderTypeChart();
+  renderTable();
+  renderRecent();
+  renderThreats();
+  renderCompliance();
+  renderAiScope();
+  updateStatusbar({ count: state.logs.length });
+}
+
+/* ----------------------------- Gemini BYOK yönetimi ----------------------- */
 function getApiKey() {
   try {
-    const key = localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY);
+    const key = localStorage.getItem(API_KEY_STORAGE);
     return key ? key.trim() : "";
-  } catch (err) {
-    console.warn("API anahtarı okunamadı:", err);
+  } catch (error) {
+    console.warn("API anahtarı okunamadı:", error);
     return "";
   }
 }
 
-// Anahtarı trim edip kaydeder, kaydedilen değeri döndürür
-function saveApiKey(key) {
-  const cleanKey = (key || "").trim();
-  if (!cleanKey) return "";
-
+function saveApiKey(value) {
+  const clean = String(value || "").trim();
+  if (!clean) return "";
   try {
-    localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, cleanKey);
-    return cleanKey;
-  } catch (err) {
-    console.warn("API anahtarı kaydedilemedi:", err);
+    localStorage.setItem(API_KEY_STORAGE, clean);
+    return clean;
+  } catch (error) {
+    console.warn("API anahtarı kaydedilemedi:", error);
     return "";
   }
 }
 
-// Kayıtlı anahtarı tarayıcıdan siler
 function clearApiKey() {
   try {
-    localStorage.removeItem(GEMINI_API_KEY_STORAGE_KEY);
-  } catch (err) {
-    console.warn("API anahtarı silinemedi:", err);
+    localStorage.removeItem(API_KEY_STORAGE);
+  } catch (error) {
+    console.warn("API anahtarı silinemedi:", error);
   }
 }
 
-// Anahtar kayıtlı değilse kullanıcıdan ister, kaydeder ve analize devam eder
-function ensureApiKey() {
-  let apiKey = getApiKey();
-  if (apiKey) return apiKey;
-
-  const userKey = window.prompt(
-    "Yapay zeka özeti için Gemini API anahtarınızı girin.\n\n" +
-      "Anahtar oluşturmak için: https://aistudio.google.com/app/apikey\n" +
-      "Anahtar yalnızca bu tarayıcıda (localStorage) saklanır, kod içinde tutulmaz."
-  );
-
-  if (userKey === null) return ""; // Kullanıcı iptal etti
-
-  apiKey = saveApiKey(userKey);
-  if (!apiKey) {
-    alert("Geçerli bir Gemini API anahtarı girilmedi. Anahtar boş olamaz.");
-    return "";
-  }
-  return apiKey;
+function maskedKey(key) {
+  return key ? `${key.slice(0, 5)}...${key.slice(-4)}` : "";
 }
 
-// "🔑 API Anahtarı" butonu: kayıtlı anahtarı günceller veya sıfırlar
-function manageApiKey() {
-  const existingKey = getApiKey();
-  const maskedKey = existingKey
-    ? `${existingKey.slice(0, 6)}...${existingKey.slice(-4)}`
-    : "";
+function updateKeyState() {
+  const key = getApiKey();
+  const stateBox = $("aiKeyState");
+  const modalHint = $("apiKeyHint");
+  const settingsHint = $("settingsKeyHint");
 
-  const input = window.prompt(
-    existingKey
-      ? `Kayıtlı Gemini API anahtarı: ${maskedKey}\n\n` +
-          "Yeni anahtarı girin. Anahtarı sıfırlamak için alanı BOŞ bırakıp Tamam'a basın."
-      : "Gemini API anahtarınızı girin.\n\n" +
-          "Anahtar oluşturmak için: https://aistudio.google.com/app/apikey"
-  );
-
-  if (input === null) return; // Kullanıcı iptal etti
-
-  const inputKey = input.trim();
-
-  if (!inputKey) {
-    if (!existingKey) {
-      alert("Kayıtlı bir API anahtarı bulunmuyor. Yapay zeka özeti sırasında anahtar istenecektir.");
-      return;
-    }
-    clearApiKey();
-    alert("Kayıtlı API anahtarı silindi. Yapay zeka özeti için anahtar yeniden sorulacak.");
-    return;
+  if (stateBox) {
+    stateBox.className = key ? "key-state saved" : "key-state";
+    stateBox.innerHTML = `<span class="dot"></span> ${key ? `API anahtarı kayıtlı (${escapeHtml(maskedKey(key))})` : "API anahtarı tanımlı değil"}`;
   }
-
-  if (saveApiKey(inputKey)) {
-    alert("API anahtarı bu tarayıcı için kaydedildi.");
-  } else {
-    alert("API anahtarı kaydedilemedi. Tarayıcı depolaması (localStorage) kullanılamıyor olabilir.");
-  }
+  if (modalHint) modalHint.textContent = key ? `Kayıtlı anahtar: ${maskedKey(key)}` : "Kayıtlı anahtar yok.";
+  if (settingsHint) settingsHint.textContent = key ? `Kayıtlı anahtar: ${maskedKey(key)}` : "Kayıtlı anahtar yok.";
 }
 
-// Geçersiz / yetkisiz anahtar kontrolü (400, 401, 403 veya API_KEY_INVALID)
-function isInvalidApiKeyError(status, error) {
+function persistKeyFromInput(inputId) {
+  const input = $(inputId);
+  const saved = saveApiKey(input ? input.value : "");
+  if (!saved) {
+    toast("Anahtar boş olamaz. Geçerli bir Gemini API anahtarı girin.", "warning", "Kaydedilemedi");
+    return false;
+  }
+  if (input) input.value = "";
+  updateKeyState();
+  return true;
+}
+
+function handleSaveKey() {
+  if (!persistKeyFromInput("apiKeyInput")) return;
+
+  // closeModal() bekleyen analizi sıfırladığı için önce durumu sakla
+  const shouldResume = state.pendingAiRun;
+  closeModal("keyModal");
+  toast("API anahtarı bu tarayıcı için kaydedildi.", "success", "Anahtar kaydedildi");
+
+  if (shouldResume) generateAiSummary();
+}
+
+function handleSaveKeyFromSettings() {
+  if (!persistKeyFromInput("settingsKeyInput")) return;
+  toast("API anahtarı bu tarayıcı için kaydedildi.", "success", "Anahtar kaydedildi");
+}
+
+function handleClearKey() {
+  clearApiKey();
+  updateKeyState();
+  ["apiKeyInput", "settingsKeyInput"].forEach((id) => {
+    const input = $(id);
+    if (input) input.value = "";
+  });
+  closeModal("keyModal");
+  toast("Kayıtlı API anahtarı silindi.", "info", "Anahtar silindi");
+}
+
+function isInvalidKeyError(status, error) {
   if (status === 400 || status === 401 || status === 403) return true;
-
-  const errorText = `${(error && error.status) || ""} ${(error && error.message) || ""} ${
+  const text = `${(error && error.status) || ""} ${(error && error.message) || ""} ${
     error && error.details ? JSON.stringify(error.details) : ""
   }`;
-
-  return /API_KEY_INVALID|API_KEY_EXPIRED|API key not valid/i.test(errorText);
+  return /API_KEY_INVALID|API_KEY_EXPIRED|API key not valid/i.test(text);
 }
 
-// Gemini API Entegrasyonu (Gemini 3.5 Flash)
+/* --------------------------- Markdown → güvenli HTML ---------------------- */
+function renderMarkdown(text) {
+  const lines = escapeHtml(text).split("\n");
+  let html = "";
+  let inList = false;
+
+  const closeList = () => {
+    if (inList) {
+      html += "</ul>";
+      inList = false;
+    }
+  };
+  const bold = (value) => value.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^#{1,4}\s+(.*)$/);
+    if (heading) {
+      closeList();
+      html += `<h4>${bold(heading[1])}</h4>`;
+      continue;
+    }
+
+    const item = line.match(/^[-*•]\s+(.*)$/);
+    if (item) {
+      if (!inList) {
+        html += "<ul>";
+        inList = true;
+      }
+      html += `<li>${bold(item[1])}</li>`;
+      continue;
+    }
+
+    closeList();
+    html += `<p>${bold(line)}</p>`;
+  }
+
+  closeList();
+  return html;
+}
+
+function aiBusy(message) {
+  const output = $("aiOutput");
+  if (!output) return;
+  output.classList.add("show");
+  $("aiPlaceholder")?.classList.add("hidden");
+  output.innerHTML = `<span class="ai-loading"><span class="spinner"></span> ${escapeHtml(message)}</span>`;
+}
+
+function aiError(title, message) {
+  const output = $("aiOutput");
+  if (!output) return;
+  output.classList.add("show");
+  $("aiPlaceholder")?.classList.add("hidden");
+  output.innerHTML = `<div class="ai-error"><strong>${escapeHtml(title)}</strong><br>${escapeHtml(message)}</div>`;
+  const copyBtn = $("copyReportBtn");
+  if (copyBtn) copyBtn.disabled = true;
+}
+
+
+/* ------------------------------- AI özet üretimi -------------------------- */
 async function generateAiSummary() {
-  const summaryBox = document.getElementById("aiSummaryBox");
-  const summaryText = document.getElementById("aiSummaryText");
-  if (!summaryBox || !summaryText) return;
+  const apiKey = getApiKey();
 
-  summaryBox.style.display = "block";
-
-  // 1. Anahtar kontrolü: yoksa kullanıcıdan iste (BYOK)
-  const apiKey = ensureApiKey();
   if (!apiKey) {
-    summaryText.innerHTML =
-      "🔑 <b>API anahtarı gerekli:</b> Özet çıkarmak için Gemini API anahtarınızı girmelisiniz. Sağ üstteki <b>🔑 API Anahtarı</b> butonunu kullanabilirsiniz.";
+    state.pendingAiRun = true;
+    aiBusy("API anahtarı bekleniyor. Lütfen anahtarınızı girin...");
+    openModal("keyModal");
     return;
   }
 
-  if (currentLogs.length === 0) {
-    summaryText.innerHTML = "⚠️ <b>Uyarı:</b> Analiz edilecek log kaydı bulunamadı.";
+  if (!state.logs.length) {
+    aiError("Analiz edilecek kayıt yok", "Firestore'da log kaydı bulunamadı.");
     return;
   }
 
-  summaryText.innerHTML = "<i>Yapay zeka canlı log verilerini inceliyor ve özet çıkarıyor...</i>";
+  const counts = severityCounts();
+  const recent = state.logs.slice(0, 60);
+  const scope = `Toplam kayıt: ${state.logs.length}
+CRITICAL: ${counts.CRITICAL}, HIGH: ${counts.HIGH}, WARNING: ${counts.WARNING}, INFO: ${counts.INFO}, RESOLVED: ${counts.RESOLVED}`;
 
-  const promptText = `
-Sen bir Siber Güvenlik ve KVKK Danışmanısın. Aşağıda bir şirketin son 5651 ve KVKK log verileri yer almaktadır.
-Teknik olmayan bir şirket yöneticisine sunmak üzere, bu logları inceleyip Türkçe olarak kısa bir günlük güvenlik özeti hazırla.
-Eğer kritik (CRITICAL/HIGH) bir KVKK veya güvenlik ihlali varsa özellikle vurgula.
+  const promptText = `Sen kurumsal bir SOC (Security Operations Center) kıdemli analistisin ve KVKK / 5651 uyum danışmanısın.
+Aşağıda şirketin canlı log yönetim panelinden alınan kayıtlar yer alıyor.
 
-Log Verisi:
-${JSON.stringify(currentLogs, null, 2)}
-`;
+Görev:
+1) Teknik olmayan üst yönetime sunulacak Türkçe, kısa ve maddeli bir "Günlük Güvenlik Özeti" hazırla.
+2) KVKK kapsamında kişisel veri ihlali riski taşıyan olayları ayrıca vurgula.
+3) 5651 kapsamında şüpheli erişim/engelleme hareketlerini belirt.
+4) En fazla 3 somut aksiyon önerisi ver.
+5) Başlıklar için "##" ve maddeler için "-" kullan.
 
-  // Gemini model listesi (ilk model bulunamazsa sıradaki denenir)
-  const models = [
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    // Yayınlanmış/kararlı model adları (yedek)
-    "gemini-2.5-flash",
-    "gemini-2.0-flash"
-  ];
+Özet metrikler:
+${scope}
 
+Log Kayıtları (en yeni ${recent.length} kayıt):
+${JSON.stringify(recent, null, 2)}`;
+
+  aiBusy("Model log kayıtlarını inceliyor...");
   let lastError = null;
 
-  for (const model of models) {
+  for (const model of GEMINI_MODELS) {
     try {
-      summaryText.innerHTML = `<i>Yapay zeka (${model}) verileri inceliyor...</i>`;
-
+      aiBusy(`${model} verileri inceliyor...`);
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey
-          },
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: promptText }]
-              }
-            ]
+            contents: [{ parts: [{ text: promptText }] }],
+            generationConfig: { temperature: 0.3, maxOutputTokens: 1600 }
           })
         }
       );
 
       const data = await response.json().catch(() => ({}));
 
-      // Geçersiz / yetkisiz anahtar: hatalı anahtarı tarayıcıdan temizle ve uyar
-      if (isInvalidApiKeyError(response.status, data.error)) {
+      if (isInvalidKeyError(response.status, data.error)) {
         clearApiKey();
-        const detail = data.error && data.error.message ? ` (${data.error.message})` : "";
-        summaryText.innerHTML =
-          `🔑 <b>Geçersiz API Anahtarı:</b> Girdiğiniz Gemini API anahtarı geçersiz veya yetkisiz ` +
-          `(HTTP ${response.status})${detail}. Hatalı anahtar bu tarayıcıdan silindi. ` +
-          `Lütfen <b>🔑 API Anahtarı</b> butonundan geçerli bir anahtar girin.`;
-        alert(
-          "Geçersiz veya yetkisiz Gemini API anahtarı. Kayıtlı anahtar tarayıcıdan silindi.\n" +
-            "Lütfen '🔑 API Anahtarı' butonundan geçerli bir anahtar girin."
+        updateKeyState();
+        aiError(
+          "Geçersiz API anahtarı",
+          `Anahtarınız reddedildi (HTTP ${response.status}). ${data?.error?.message || ""} ` +
+          "Hatalı anahtar tarayıcıdan silindi; lütfen Ayarlar veya API Anahtarı bölümünden geçerli bir anahtar girin."
         );
+        toast("Gemini API anahtarı geçersiz. Kayıtlı anahtar silindi.", "error", "Anahtar hatası");
         return;
       }
 
-      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-        const aiReply = data.candidates[0].content.parts[0].text;
-
-        summaryText.innerHTML = aiReply
-          .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
-          .replace(/\n/g, "<br>");
-        return; 
-      } else if (data.error) {
-        console.warn(`${model} uyarısı:`, data.error.message);
-        lastError = data.error.message;
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        state.aiReportText = text;
+        const output = $("aiOutput");
+        if (output) {
+          output.classList.add("show");
+          output.innerHTML = renderMarkdown(text);
+        }
+        $("aiPlaceholder")?.classList.add("hidden");
+        const modelInfo = $("aiModelInfo");
+        if (modelInfo) modelInfo.textContent = `Model: ${model} • ${formatClock(new Date())}`;
+        const copyBtn = $("copyReportBtn");
+        if (copyBtn) copyBtn.disabled = false;
+        toast("Yönetici özeti oluşturuldu.", "success", "AI Analizi");
+        return;
       }
-    } catch (err) {
-      console.error(`${model} bağlantı hatası:`, err);
-      lastError = err.message;
+
+      lastError = data?.error?.message || `${model} yanıt vermedi.`;
+    } catch (error) {
+      console.warn(`${model} hatası:`, error);
+      lastError = error.message;
     }
   }
 
-  summaryText.innerHTML = `⚠️ <b>API Hatası:</b> ${lastError || "Sunucudan yanıt alınamadı."}`;
+  aiError("Özet oluşturulamadı", lastError || "Sunucudan yanıt alınamadı.");
+  toast(lastError || "AI özeti oluşturulamadı.", "error", "AI hatası");
 }
+
+async function copyReport() {
+  if (!state.aiReportText) {
+    toast("Kopyalanacak rapor bulunmuyor. Önce özet çıkarın.", "warning", "Rapor yok");
+    return;
+  }
+
+  const header = `SOC Analist Paneli — Günlük Yönetici Özeti\nOluşturma: ${new Date().toLocaleString("tr-TR")}\nAnalist: ${state.user?.email || "demo"}\n\n`;
+  const content = header + state.aiReportText;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content);
+    } else {
+      const area = document.createElement("textarea");
+      area.value = content;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    toast("Rapor panoya kopyalandı.", "success", "Kopyalandı");
+  } catch (error) {
+    console.error("Kopyalama hatası:", error);
+    toast("Rapor kopyalanamadı. Tarayıcı pano iznini kontrol edin.", "error", "Kopyalama hatası");
+  }
+}
+
+/* ----------------------------- Rastgele IPv4 ------------------------------ */
+const IP_POOL = ["10.0.14.22", "185.220.101.42", "172.16.8.91", "192.168.1.134", "10.0.22.77", "203.0.113.58"];
+
+function randomIPv4() {
+  const privateRanges = [
+    () => `10.${rnd(0, 255)}.${rnd(0, 255)}.${rnd(1, 254)}`,
+    () => `172.${rnd(16, 31)}.${rnd(0, 255)}.${rnd(1, 254)}`,
+    () => `192.168.${rnd(0, 255)}.${rnd(1, 254)}`
+  ];
+  const pool = privateRanges[rnd(0, privateRanges.length - 1)];
+  return pool();
+}
+
+function rnd(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function fillRandomIp() {
+  const input = $("logSourceIp");
+  if (!input) return;
+  // Havuzdan gerçekçi bir adres seç, tekrar etmesin
+  const current = input.value.trim();
+  const candidates = IP_POOL.filter((ip) => ip !== current);
+  input.value = candidates.length ? candidates[rnd(0, candidates.length - 1)] : randomIPv4();
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
+}
+
+
+
+/* ------------------------------ Log oluşturma ----------------------------- */
+async function handleCreateLog(event) {
+  event.preventDefault();
+
+  const saveBtn = $("saveLogBtn");
+  const original = saveBtn ? saveBtn.innerHTML : "";
+
+  const payload = {
+    timestamp: localTimestamp(),
+    log_type: $("logType")?.value || "5651_WEB",
+    action: $("logAction")?.value || "ALLOW",
+    severity: normalizeSeverity($("logSeverity")?.value),
+    user: ($("logUser")?.value || "").trim(),
+    source_ip: ($("logSourceIp")?.value || "").trim(),
+    destination_ip: ($("logDestIp")?.value || "").trim(),
+    details: ($("logDetails")?.value || "").trim(),
+    status: "Aktif",
+    source: "soc-console"
+  };
+
+  if (!payload.user || !payload.details) {
+    toast("Kullanıcı ve olay detayı zorunludur.", "warning", "Eksik bilgi");
+    return;
+  }
+
+  try {
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = `<span class="spinner"></span> Kaydediliyor...`;
+    }
+
+    await createLog(payload);
+    closeModal("logModal");
+    $("newLogForm")?.reset();
+
+    await loadLogs({ silent: true });
+    toast("Log kaydı Firestore'a eklendi.", "success", "Kayıt oluşturuldu");
+  } catch (error) {
+    console.error("Log ekleme hatası:", error);
+    toast(error.message, "error", "Kayıt eklenemedi");
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = original;
+    }
+  }
+}
+
+/* --------------------------- Satır aksiyonları ---------------------------- */
+async function handleRowAction(event) {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+
+  const { action, id } = button.dataset;
+  if (!id) return;
+
+  if (action === "resolve") {
+    button.disabled = true;
+    try {
+      await markLogResolved(id);
+      await loadLogs({ silent: true });
+      toast("Kayıt \"İncelendi\" olarak güncellendi.", "success", "Durum güncellendi");
+    } catch (error) {
+      console.error("Güncelleme hatası:", error);
+      toast(error.message, "error", "Güncellenemedi");
+      button.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "delete") {
+    if (!window.confirm("Bu log kaydı Firestore'dan kalıcı olarak silinecek. Onaylıyor musunuz?")) return;
+    button.disabled = true;
+    try {
+      await deleteLogRecord(id);
+      await loadLogs({ silent: true });
+      toast("Kayıt Firestore'dan silindi.", "success", "Kayıt silindi");
+    } catch (error) {
+      console.error("Silme hatası:", error);
+      toast(error.message, "error", "Silinemedi");
+      button.disabled = false;
+    }
+  }
+}
+
+/* -------------------------------- Filtreler ------------------------------- */
+let searchTimer = null;
+
+function refreshListView() {
+  applyFilters();
+  renderKPIs();
+  renderTable();
+}
+
+function bindFilters() {
+  const search = $("searchInput");
+  const severity = $("filterSeverity");
+  const status = $("filterStatus");
+  const type = $("filterType");
+
+  if (search) {
+    search.addEventListener("input", () => {
+      state.filters.query = search.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(refreshListView, 160);
+    });
+  }
+
+  [
+    [severity, "severity"],
+    [status, "status"],
+    [type, "type"]
+  ].forEach(([element, key]) => {
+    if (!element) return;
+    element.addEventListener("change", () => {
+      state.filters[key] = element.value;
+      refreshListView();
+    });
+  });
+
+  $("clearFiltersBtn")?.addEventListener("click", () => {
+    state.filters = { query: "", severity: "ALL", status: "ALL", type: "ALL" };
+    if (search) search.value = "";
+    if (severity) severity.value = "ALL";
+    if (status) status.value = "ALL";
+    if (type) type.value = "ALL";
+    refreshListView();
+  });
+}
+
+/* --------------------------------- Olaylar -------------------------------- */
+function bindEvents() {
+  bindNavigation();
+  bindModals();
+
+  $("menuBtn")?.addEventListener("click", () => {
+    if ($("sidebar")?.classList.contains("open")) closeSidebar();
+    else openSidebar();
+  });
+  $("sidebarBackdrop")?.addEventListener("click", closeSidebar);
+
+  // Log modalı
+  $("openLogModalBtn")?.addEventListener("click", () => openModal("logModal"));
+  $("newLogForm")?.addEventListener("submit", handleCreateLog);
+  $("randomIpBtn")?.addEventListener("click", fillRandomIp);
+
+  // AI
+  $("aiGenerateBtn")?.addEventListener("click", generateAiSummary);
+  $("aiKeyBtn")?.addEventListener("click", () => openModal("keyModal"));
+  $("saveKeyBtn")?.addEventListener("click", handleSaveKey);
+  $("clearKeyBtn")?.addEventListener("click", handleClearKey);
+  $("copyReportBtn")?.addEventListener("click", copyReport);
+
+  // Ayarlar sekmesi
+  $("settingsSaveKeyBtn")?.addEventListener("click", handleSaveKeyFromSettings);
+  $("settingsClearKeyBtn")?.addEventListener("click", handleClearKey);
+  $("settingsGoAiBtn")?.addEventListener("click", () => switchView("ai"));
+  $("settingsLogoutBtn")?.addEventListener("click", handleLogout);
+
+  // Yenile / çıkış
+  $("refreshBtn")?.addEventListener("click", () => loadLogs());
+  $("logoutBtn")?.addEventListener("click", handleLogout);
+
+  // Kimlik doğrulama
+  document.querySelectorAll("[data-auth-mode]").forEach((tab) => {
+    tab.addEventListener("click", () => setAuthMode(tab.dataset.authMode));
+  });
+  $("authForm")?.addEventListener("submit", handleAuthSubmit);
+  $("authDemoBtn")?.addEventListener("click", enterDemoMode);
+
+  // Tablo / tehdit aksiyonları
+  document.addEventListener("click", handleRowAction);
+
+  bindFilters();
+}
+
+/* ---------------------------------- Başlat -------------------------------- */
+async function init() {
+  ["sideProjectId", "statusProject", "settingsProject"].forEach((id) => {
+    const el = $(id);
+    if (el) el.textContent = firebaseConfig.projectId || "-";
+  });
+
+  bindEvents();
+  updateKeyState();
+  setAuthMode("login");
+  updateStatusbar();
+  switchView("overview");
+
+  if (typeof Chart === "undefined") {
+    toast("Chart.js yüklenemedi. Grafikler devre dışı, tablo çalışmaya devam ediyor.", "warning", "Grafik uyarısı");
+  }
+
+  await initAuth();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init, { once: true });
+} else {
+  init();
+}
+
+
