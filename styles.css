@@ -1,7 +1,3 @@
-/* ==========================================================================
-   SOC Analist Paneli — Kurumsal Koyu Tema
-   Saf CSS3: CSS Variables + Flexbox + Grid
-   ========================================================================== */
 
 :root {
   /* Yüzeyler */
@@ -68,8 +64,6 @@ a:hover { text-decoration: underline; }
 button { font-family: inherit; }
 ::selection { background: rgba(56, 189, 248, 0.3); }
 
-/* ---------------------------------------------------------------- SVG ikonlar
-   Tüm inline SVG'ler kapsayıcısına göre sabit boyutta kalır; asla ekranı kaplamaz. */
 svg {
   width: 18px;
   height: 18px;
@@ -87,10 +81,8 @@ svg {
 ::-webkit-scrollbar-thumb { background: #263854; border-radius: 20px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #33486b; }
 
-/* ------------------------------------------------------------------ Yerleşim */
 .layout { display: flex; min-height: 100vh; width: 100%; max-width: 100%; }
 
-/* ------------------------------------------------------------------- Sidebar */
 .sidebar {
   width: var(--sidebar-w);
   flex: 0 0 var(--sidebar-w);
@@ -188,8 +180,6 @@ svg {
   display: none;
 }
 
-/* -------------------------------------------------------------------- Topbar */
-/* Sidebar yanındaki ana içerik tüm kalan genişliği doldurur (sağda boşluk kalmaz) */
 .main {
   flex: 1 1 auto;
   min-width: 0;
@@ -236,7 +226,6 @@ svg {
 .conn-pill.loading .dot { background: var(--accent); animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* ---------------------------------------------------------------- Kullanıcı */
 .user-chip {
   display: flex; align-items: center; gap: 9px;
   padding: 4px 12px 4px 4px;
@@ -267,7 +256,6 @@ svg {
 }
 .user-meta small { font-size: 0.66rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 
-/* -------------------------------------------------------------------- İçerik */
 .content {
   padding: 20px 24px 40px;
   display: flex;
@@ -279,7 +267,6 @@ svg {
   min-width: 0;
 }
 
-/* --------------------------------------------------------- SPA görünümleri */
 .view-section {
   display: none;
   flex-direction: column;
@@ -291,7 +278,6 @@ svg {
 .view-section.active { display: flex; animation: viewIn 0.18s ease; }
 @keyframes viewIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-/* ------------------------------------------------------------------- Butonlar */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   padding: 9px 14px;
@@ -338,7 +324,6 @@ svg {
 .sidebar-backdrop.open { display: block; }
 
 
-/* ---------------------------------------------------------------------- Kartlar */
 .card {
   background: linear-gradient(180deg, var(--surface) 0%, #0d1524 100%);
   border: 1px solid var(--border-soft);
@@ -359,8 +344,6 @@ svg {
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
 
-/* ------------------------------------------------------------------- KPI kartları */
-/* 5 kart tek satırda eşit genişlikte; minmax(0,1fr) ile taşma engellenir */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -408,8 +391,7 @@ svg {
 .kpi-value { font-size: 1.9rem; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; }
 .kpi-hint { font-size: 0.73rem; color: var(--text-dim); }
 
-/* --------------------------------------------------------------------- Grafikler */
-/* 3 grafik tek satırda eşit sütunlarda */
+
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -423,18 +405,15 @@ svg {
 .chart-wrap { position: relative; height: 250px; min-height: 250px; width: 100%; }
 .chart-wrap canvas { width: 100% !important; height: 100% !important; }
 
-/* Genel Bakış: grafik altı açıklama etiketleri (legend) kesilmesin */
 #view-overview .chart-wrap { height: 268px; min-height: 268px; }
 #view-overview .chart-wrap canvas { display: block; }
 
-/* Genel Bakış: son olaylar tablosu tam genişlikte */
 #view-overview > .card {
   width: 100%;
   max-width: 100%;
   margin-top: 20px;
 }
 
-/* ---------------------------------------------------------------- İstatistik kutuları */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
 .stat {
   display: flex; flex-direction: column; gap: 4px;
@@ -446,7 +425,6 @@ svg {
 .stat span { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); font-weight: 650; }
 .stat strong { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.01em; }
 
-/* ------------------------------------------------------------------ Filtre çubuğu */
 .filters {
   display: grid;
   grid-template-columns: minmax(220px, 2.2fr) repeat(3, minmax(140px, 1fr));
@@ -488,7 +466,6 @@ textarea { resize: vertical; min-height: 84px; }
 .filter-info { padding: 10px 18px; font-size: 0.76rem; color: var(--text-dim); display: none; border-bottom: 1px solid var(--border-soft); }
 .filter-info.show { display: block; }
 
-/* ------------------------------------------------------------------------- Tablo */
 .table-wrap { overflow-x: auto; }
 table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .log-table thead th {
@@ -523,7 +500,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .cell-actions { text-align: right; white-space: nowrap; }
 .row-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
 
-/* IP hücresi: kaynak → hedef, tek satır ve ok ile ayrılmış */
 .ip-cell { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-family: var(--mono); font-size: 0.76rem; color: var(--text-muted); }
 .ip-cell .ip {
   display: inline-flex; align-items: center;
@@ -574,14 +550,12 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .badge-action.failed-login { color: #fef08a; background: var(--warning-soft); border-color: rgba(250, 204, 21, 0.32); }
 .badge-action.other { color: var(--text-muted); background: var(--surface-2); border-color: var(--border); }
 
-/* --------------------------------------------------------------- Boş durum */
 .empty-state { padding: 44px 22px; text-align: center; color: var(--text-muted); }
 .empty-state svg { width: 22px; height: 22px; color: var(--text-dim); margin-bottom: 10px; }
 .empty-state h3 { font-size: 0.94rem; margin-bottom: 6px; color: var(--text); }
 .empty-state p { font-size: 0.8rem; color: var(--text-dim); max-width: 440px; margin: 0 auto; }
 
 
-/* -------------------------------------------------------------- AI analiz paneli */
 .ai-card { position: relative; }
 .ai-card::before {
   content: "";
@@ -641,7 +615,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* --------------------------------------------------------------- Tehdit kuyruğu */
 .threat-list { display: flex; flex-direction: column; gap: 12px; }
 .threat-item {
   display: grid;
@@ -666,8 +639,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 }
 .threat-item.critical .threat-icon { background: var(--critical-soft); color: var(--critical); border-color: rgba(244, 63, 94, 0.32); }
 
-/* ================================================================ MODAL (overlay)
-   Varsayılan olarak KAPALI; yalnızca .open sınıfı ile ekranın ortasında açılır. */
 .modal-backdrop {
   display: none;
   position: fixed;
@@ -727,7 +698,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .modal-close svg { width: 18px; height: 18px; max-width: 18px; max-height: 18px; }
 .modal-close:hover { background: var(--surface-3); color: var(--text); }
 
-/* ------------------------------------------------------------------- Formlar */
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .form-row.full { grid-column: 1 / -1; }
@@ -740,7 +710,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .input-icon svg { position: absolute; left: 12px; width: 16px; height: 16px; color: var(--text-dim); pointer-events: none; }
 .input-icon input { padding-left: 36px; }
 
-/* --------------------------------------------------------------------- Toasts */
 .toast-stack {
   position: fixed; right: 20px; bottom: 20px;
   z-index: 1200;
@@ -771,7 +740,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 @keyframes toastIn { from { transform: translateX(18px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes toastOut { to { transform: translateX(18px); opacity: 0; } }
 
-/* -------------------------------------------------------------- Durum çubuğu */
 .statusbar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 10px 24px;
@@ -792,7 +760,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .threat-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 
-/* ================================================================ GİRİŞ EKRANI */
 .auth-screen {
   min-height: 100vh;
   display: grid;
@@ -877,7 +844,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .auth-error.show { display: block; }
 .auth-error strong { display: block; margin-bottom: 3px; }
 
-/* -------------------------------------------------------------- Ayarlar / analist */
 .analyst-card {
   display: flex; align-items: center; gap: 14px;
   padding: 14px 16px;
@@ -894,7 +860,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .meta-list dt { font-size: 0.76rem; color: var(--text-dim); }
 .meta-list dd { margin: 0; font-size: 0.78rem; color: var(--text); text-align: right; overflow-wrap: anywhere; }
 
-/* ------------------------------------------------------------------ Kontrol listesi */
 .checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .checklist li {
   display: flex; align-items: flex-start; gap: 10px;
@@ -916,13 +881,12 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
 .checklist li.pass { border-color: rgba(34, 197, 94, 0.3); }
 .checklist li.pass .check-icon { background: var(--resolved-soft); color: var(--resolved); }
 
-/* ----------------------------------------------------------------- Responsive */
 @media (max-width: 1440px) {
-  /* 5 KPI kartı dar ekranda 3 sütuna düşer (3 + 2) */
+ 
   .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1280px) {
-  /* 3 grafik 2 sütuna iner, tek kart alt satıra geçer */
+  
   .charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 1180px) {
@@ -962,7 +926,6 @@ table.log-table { width: 100%; border-collapse: collapse; min-width: 860px; }
   .threat-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 
-/* ------------------------------------------------------------------ Yardımcılar */
 .hidden { display: none !important; }
 .mono { font-family: var(--mono); }
 .text-muted { color: var(--text-muted); }

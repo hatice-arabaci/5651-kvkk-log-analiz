@@ -1,12 +1,4 @@
-/* =============================================================================
-   SOC Analist Paneli — 5651 & KVKK Log İzleme
-   -----------------------------------------------------------------------------
-   HTML5 + CSS3 + Vanilla JS (ES Module) + Chart.js 4 + Firebase Web SDK v10.12.2
-   Veri : Firebase Firestore (logs)   |  Oturum : Firebase Authentication
-   AI   : Google Gemini (BYOK — anahtar yalnızca localStorage'da tutulur)
-   ========================================================================== */
 
-/* ------------------------------- Yapılandırma ------------------------------ */
 const firebaseConfig = {
   apiKey: "AIzaSyAuts9sbuV-MoZxKR44shz4sFzk0gDR8ig",
   authDomain: "logornegi-12cfb.firebaseapp.com",
@@ -33,7 +25,6 @@ const VIEW_META = {
   settings: { title: "Ayarlar", subtitle: "API anahtarı yönetimi ve analist hesabı" }
 };
 
-/* --------------------------------- Durum ---------------------------------- */
 const state = {
   logs: [],
   view: [],
@@ -54,7 +45,6 @@ const state = {
   filters: { query: "", severity: "ALL", status: "ALL", type: "ALL" }
 };
 
-/* -------------------------------- Yardımcılar ----------------------------- */
 const $ = (id) => document.getElementById(id);
 
 function escapeHtml(value) {
@@ -66,7 +56,6 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-// "YYYY-MM-DD HH:mm:ss", ISO veya Firestore Timestamp → Date
 function parseTimestamp(value) {
   if (!value) return null;
   if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
@@ -132,7 +121,6 @@ function localTimestamp(date = new Date()) {
     `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-/* --------------------------------- Toasts --------------------------------- */
 const TOAST_ICONS = { success: "#i-check", error: "#i-alert", warning: "#i-alert", info: "#i-info" };
 
 function toast(message, type = "info", title = "") {
@@ -153,7 +141,6 @@ function toast(message, type = "info", title = "") {
   }, 5200);
 }
 
-/* ------------------------------ Bağlantı durumu --------------------------- */
 function setConnection(stateName, text) {
   const pill = $("connPill");
   const label = $("connPillText");
@@ -232,7 +219,6 @@ function closeSidebar() {
   $("sidebarBackdrop")?.classList.remove("open");
 }
 
-/* ------------------------------- Modallar --------------------------------- */
 let lastFocusedElement = null;
 
 function openModal(id) {
@@ -292,7 +278,7 @@ function bindModals() {
 }
 
 
-/* ------------------------------ Firebase init ----------------------------- */
+
 function isFirebaseConfigured() {
   return ["apiKey", "projectId", "appId"].every((key) => {
     const value = typeof firebaseConfig[key] === "string" ? firebaseConfig[key].trim() : "";
@@ -322,7 +308,7 @@ async function initFirebase() {
   state.auth = authMod.getAuth(app);
 }
 
-/* --------------------------- Firebase Authentication ---------------------- */
+
 const AUTH_ERRORS = {
   "auth/invalid-email": "E-posta adresi geçersiz görünüyor.",
   "auth/missing-password": "Lütfen parolanızı girin.",
@@ -399,7 +385,7 @@ function setAuthBusy(busy, label) {
   if (text) text.textContent = busy ? label || "İşleniyor..." : (state.authMode === "register" ? "Kayıt Ol" : "Giriş Yap");
 }
 
-/* ----------------------------- Oturum görünümü ---------------------------- */
+
 function showAuthScreen() {
   $("appShell")?.classList.add("hidden");
   $("authScreen")?.classList.remove("hidden");
@@ -548,8 +534,7 @@ async function initAuth() {
 
   const { onAuthStateChanged } = state.fbAuth;
 
-  // Auth yapılandırması eksikse onAuthStateChanged hiç tetiklenmeyebilir:
-  // 6 saniye içinde oturum durumu gelmezse kullanıcıyı bilgilendir.
+
   const authTimeout = setTimeout(() => {
     if (state.authReady) return;
     state.authReady = true;
@@ -600,7 +585,6 @@ async function initAuth() {
 }
 
 
-/* ------------------------------- Firestore CRUD ---------------------------- */
 async function ensureFirestore() {
   if (!state.db || !state.fb) await initFirebase();
 }
@@ -719,7 +703,7 @@ async function deleteLogRecord(id) {
   await deleteDoc(doc(state.db, LOGS_COLLECTION, String(id)));
 }
 
-/* ------------------------- Rozet / hücre biçimlendirme -------------------- */
+
 const ACTION_CLASSES = {
   ALLOW: "allow",
   BLOCK: "block",
@@ -745,7 +729,7 @@ function statusBadge(log) {
     : `<span class="tag info">Aktif</span>`;
 }
 
-// Kaynak → Hedef: ok ile ayrılmış, tek satır ve taşmaz
+
 function ipCell(log) {
   const source = String(log.source_ip || "").trim();
   const dest = String(log.destination_ip || "").trim();
@@ -759,7 +743,7 @@ function ipCell(log) {
   return `<span class="ip-cell">${sourceHtml}<span class="ip-arrow">→</span><span class="ip dest">${escapeHtml(dest)}</span></span>`;
 }
 
-/* --------------------------------- KPI kartları --------------------------- */
+
 function renderKPIs() {
   const total = state.logs.length;
   const last24 = state.logs.filter((log) => isWithinLast24Hours(log.timestamp)).length;
@@ -955,7 +939,7 @@ function renderTypeChart() {
 }
 
 
-/* ---------------------------------- Filtreler ----------------------------- */
+
 function applyFilters() {
   const { query, severity, status, type } = state.filters;
   const needle = query.trim().toLowerCase();
@@ -995,7 +979,6 @@ function applyFilters() {
   }
 }
 
-/* ------------------------------------ Tablo ------------------------------- */
 function renderTable() {
   const tbody = $("logTbody");
   if (!tbody) return;
@@ -1053,7 +1036,7 @@ function renderTable() {
   }).join("");
 }
 
-// Genel Bakış: son 5 kritik/güncel kayıt
+
 function renderRecent() {
   const tbody = $("recentTbody");
   if (!tbody) return;
@@ -1091,7 +1074,6 @@ function renderRecent() {
 }
 
 
-/* ------------------------------- Tehdit durumu ---------------------------- */
 function pendingThreats() {
   return state.logs.filter((log) => {
     const sev = normalizeSeverity(log.severity);
@@ -1158,7 +1140,7 @@ function renderThreats() {
   }).join("");
 }
 
-/* ------------------------------ KVKK uyumluluk ---------------------------- */
+
 function renderCompliance() {
   const total = state.logs.length;
   const withTimestamp = state.logs.filter((log) => parseTimestamp(log.timestamp)).length;
@@ -1245,7 +1227,6 @@ function renderCompliance() {
 }
 
 
-/* ------------------------------- AI kapsam özeti -------------------------- */
 function renderAiScope() {
   const counts = severityCounts();
   const pending = state.logs.filter((log) => !isResolvedLog(log)).length;
@@ -1261,7 +1242,6 @@ function renderAiScope() {
   set("scopeLatest", latest ? formatDateTime(latest.timestamp) : "-");
 }
 
-/* ------------------------------- Tüm render ------------------------------- */
 function renderAll() {
   applyFilters();
   renderKPIs();
@@ -1276,7 +1256,7 @@ function renderAll() {
   updateStatusbar({ count: state.logs.length });
 }
 
-/* ----------------------------- Gemini BYOK yönetimi ----------------------- */
+
 function getApiKey() {
   try {
     const key = localStorage.getItem(API_KEY_STORAGE);
@@ -1340,7 +1320,6 @@ function persistKeyFromInput(inputId) {
 function handleSaveKey() {
   if (!persistKeyFromInput("apiKeyInput")) return;
 
-  // closeModal() bekleyen analizi sıfırladığı için önce durumu sakla
   const shouldResume = state.pendingAiRun;
   closeModal("keyModal");
   toast("API anahtarı bu tarayıcı için kaydedildi.", "success", "Anahtar kaydedildi");
@@ -1372,7 +1351,6 @@ function isInvalidKeyError(status, error) {
   return /API_KEY_INVALID|API_KEY_EXPIRED|API key not valid/i.test(text);
 }
 
-/* --------------------------- Markdown → güvenli HTML ---------------------- */
 function renderMarkdown(text) {
   const lines = escapeHtml(text).split("\n");
   let html = "";
@@ -1437,7 +1415,6 @@ function aiError(title, message) {
 }
 
 
-/* ------------------------------- AI özet üretimi -------------------------- */
 async function generateAiSummary() {
   const apiKey = getApiKey();
 
@@ -1564,7 +1541,6 @@ async function copyReport() {
   }
 }
 
-/* ----------------------------- Rastgele IPv4 ------------------------------ */
 const IP_POOL = ["10.0.14.22", "185.220.101.42", "172.16.8.91", "192.168.1.134", "10.0.22.77", "203.0.113.58"];
 
 function randomIPv4() {
@@ -1593,8 +1569,6 @@ function fillRandomIp() {
 }
 
 
-
-/* ------------------------------ Log oluşturma ----------------------------- */
 async function handleCreateLog(event) {
   event.preventDefault();
 
@@ -1642,7 +1616,6 @@ async function handleCreateLog(event) {
   }
 }
 
-/* --------------------------- Satır aksiyonları ---------------------------- */
 async function handleRowAction(event) {
   const button = event.target.closest("[data-action]");
   if (!button) return;
@@ -1679,7 +1652,6 @@ async function handleRowAction(event) {
   }
 }
 
-/* -------------------------------- Filtreler ------------------------------- */
 let searchTimer = null;
 
 function refreshListView() {
@@ -1724,7 +1696,6 @@ function bindFilters() {
   });
 }
 
-/* --------------------------------- Olaylar -------------------------------- */
 function bindEvents() {
   bindNavigation();
   bindModals();
@@ -1770,7 +1741,7 @@ function bindEvents() {
   bindFilters();
 }
 
-/* ---------------------------------- Başlat -------------------------------- */
+
 async function init() {
   ["sideProjectId", "statusProject", "settingsProject"].forEach((id) => {
     const el = $(id);

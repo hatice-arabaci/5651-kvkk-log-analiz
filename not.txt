@@ -1,6 +1,0 @@
-﻿# Bu dosya artik API anahtari icermiyor.
-# Gemini API anahtari, uygulama arayuzundeki "API Anahtari" butonu ile
-# tarayicida (localStorage: gemini_api_key) saklanir.
-#
-# NOT: Daha once bu dosyada yer alan anahtar ifsa oldugu icin iptal edilmelidir:
-# https://aistudio.google.com/app/apikey

@@ -11,7 +11,6 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-  <!-- ======================= SVG İKON SPRITE (harici CDN yok) ======================= -->
   <svg xmlns="http://www.w3.org/2000/svg" class="icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3.1 8.2-7.5 9.5-4.4-1.3-7.5-4.9-7.5-9.5V6L12 3z"/><path d="M9.2 12.2l2 2 3.6-3.8"/></symbol>
     <symbol id="i-dashboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="4.6" rx="1.6"/><rect x="13.5" y="10.4" width="7.5" height="10.6" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/></symbol>
@@ -43,7 +42,6 @@
     <symbol id="i-list-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5l1.8 1.8L9 5"/><path d="M4 17l1.8 1.8L9 15.5"/><path d="M12.5 6.8H21M12.5 17.3H21"/><path d="M12.5 12h8.5"/></symbol>
   </svg>
 
-  <!-- ============================ GİRİŞ EKRANI ============================ -->
   <div class="auth-screen" id="authScreen">
     <section class="auth-hero">
       <div class="auth-brand">
@@ -117,9 +115,7 @@
     </section>
   </div>
 
-  <!-- ============================ UYGULAMA KABUĞU ========================= -->
   <div class="layout hidden" id="appShell">
-    <!-- ============================== SIDEBAR ============================== -->
     <aside class="sidebar" id="sidebar">
       <div class="brand">
         <span class="brand-mark"><svg><use href="#i-shield"/></svg></span>
@@ -164,7 +160,6 @@
     </aside>
     <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
-    <!-- ================================ MAIN =============================== -->
     <div class="main">
       <header class="topbar">
         <button class="btn btn-ghost btn-icon" id="menuBtn" type="button" aria-label="Menüyü aç">
@@ -202,7 +197,6 @@
       </header>
 
       <main class="content">
-        <!-- ========================== GÖRÜNÜM: GENEL BAKIŞ ========================== -->
         <section class="view-section active" id="view-overview" data-view="overview" aria-label="Genel bakış">
           <div class="kpi-grid">
             <article class="kpi">
@@ -250,7 +244,6 @@
               <div class="kpi-hint">Analist aksiyonu bekliyor</div>
             </article>
           </div>
-          <!-- /kpi-grid -->
 
           <div class="charts-grid">
             <div class="card">
@@ -321,9 +314,7 @@
             </div>
           </div>
         </section>
-        <!-- /view-overview -->
-
-        <!-- ========================== GÖRÜNÜM: LOG KAYITLARI ========================= -->
+      
         <section class="view-section" id="view-logs" data-view="logs" aria-label="Log kayıtları">
           <div class="card">
             <div class="card-head">
@@ -388,7 +379,6 @@
           </div>
         </section>
 
-        <!-- ============================ GÖRÜNÜM: AI ANALİZ =========================== -->
         <section class="view-section" id="view-ai" data-view="ai" aria-label="Yapay zeka analizi">
           <div class="card ai-card">
             <div class="card-head">
@@ -449,8 +439,6 @@
           </div>
         </section>
 
-
-        <!-- ========================== GÖRÜNÜM: TEHDİT DURUMU ========================= -->
         <section class="view-section" id="view-threats" data-view="threats" aria-label="Tehdit durumu">
           <div class="kpi-grid">
             <article class="kpi critical">
@@ -506,8 +494,6 @@
           </div>
         </section>
 
-
-        <!-- ========================== GÖRÜNÜM: UYUMLULUK ============================ -->
         <section class="view-section" id="view-compliance" data-view="compliance" aria-label="KVKK uyumluluk">
           <div class="stat-grid">
             <div class="stat">
@@ -574,7 +560,6 @@
         </section>
 
 
-        <!-- ============================ GÖRÜNÜM: AYARLAR ============================ -->
         <section class="view-section" id="view-settings" data-view="settings" aria-label="Ayarlar">
           <div class="grid-2">
             <div class="card">
@@ -655,7 +640,6 @@
     </div>
   </div>
 
-  <!-- ============================ MODAL: YENİ LOG KAYDI ============================ -->
   <div class="modal-backdrop" id="logModal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle" aria-hidden="true">
     <div class="modal-card">
       <div class="modal-head">
@@ -733,7 +717,6 @@
     </div>
   </div>
 
-  <!-- ============================ MODAL: API ANAHTARI ============================= -->
   <div class="modal-backdrop" id="keyModal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle" aria-hidden="true">
     <div class="modal-card narrow">
       <div class="modal-head">
