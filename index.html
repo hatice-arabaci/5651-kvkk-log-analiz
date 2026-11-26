@@ -110,7 +110,7 @@
         </button>
 
         <p class="auth-note">Oturum yönetimi Firebase Authentication ile sağlanır.</p>
-        <button class="auth-demo hidden" type="button" id="authDemoBtn">Kimlik doğrulama kapalıysa demo modunda incele</button>
+      
       </form>
     </section>
   </div>
@@ -178,10 +178,7 @@
         <button class="btn btn-icon" id="refreshBtn" type="button" title="Kayıtları yenile" aria-label="Yenile">
           <svg><use href="#i-refresh"/></svg>
         </button>
-        <button class="btn btn-primary" id="openLogModalBtn" type="button">
-          <svg><use href="#i-plus"/></svg>
-          <span>Yeni Log</span>
-        </button>
+   
 
         <div class="user-chip" id="userChip" title="Aktif analist">
           <span class="avatar" id="userAvatar">A</span>
@@ -333,19 +330,19 @@
                 <svg><use href="#i-search"/></svg>
                 <input type="search" id="searchInput" placeholder="Kullanıcı, IP veya olay detayı ara..." autocomplete="off">
               </div>
-              <select id="filterSeverity" aria-label="Önem seviyesi filtresi">
+             <select id="filterSeverity" aria-label="Önem seviyesi filtresi">
                 <option value="ALL">Önem: Tümü</option>
                 <option value="CRITICAL">CRITICAL</option>
                 <option value="HIGH">HIGH</option>
                 <option value="WARNING">WARNING</option>
                 <option value="INFO">INFO</option>
-                <option value="RESOLVED">RESOLVED</option>
               </select>
               <select id="filterStatus" aria-label="Durum filtresi">
                 <option value="ALL">Durum: Tümü</option>
                 <option value="PENDING">Bekleyen</option>
                 <option value="RESOLVED">İncelenen</option>
               </select>
+
               <select id="filterType" aria-label="Olay tipi filtresi">
                 <option value="ALL">Tip: Tümü</option>
                 <option value="5651_WEB">5651 WEB</option>
@@ -637,83 +634,6 @@
         <span class="sep">|</span>
         <span><strong>Proje:</strong> <span id="statusProject">-</span></span>
       </footer>
-    </div>
-  </div>
-
-  <div class="modal-backdrop" id="logModal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle" aria-hidden="true">
-    <div class="modal-card">
-      <div class="modal-head">
-        <h3 id="logModalTitle">
-          <svg><use href="#i-plus"/></svg>
-          Yeni Log Kaydı
-        </h3>
-        <span class="spacer"></span>
-        <button class="modal-close" type="button" data-close-modal aria-label="Kapat">
-          <svg><use href="#i-close"/></svg>
-        </button>
-      </div>
-      <form id="newLogForm">
-        <div class="modal-body">
-          <div class="form-grid">
-            <div class="form-row">
-              <label for="logUser">Kullanıcı</label>
-              <input type="text" id="logUser" name="user" placeholder="örn. ahmet.yilmaz" required maxlength="80">
-            </div>
-            <div class="form-row">
-              <label for="logSeverity">Önem Seviyesi</label>
-              <select id="logSeverity" name="severity">
-                <option value="INFO">INFO</option>
-                <option value="WARNING">WARNING</option>
-                <option value="HIGH">HIGH</option>
-                <option value="CRITICAL">CRITICAL</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label for="logType">Olay Tipi</label>
-              <select id="logType" name="log_type">
-                <option value="5651_WEB">5651 WEB</option>
-                <option value="5651_FIREWALL">5651 FIREWALL</option>
-                <option value="KVKK_DLP">KVKK DLP</option>
-                <option value="KVKK_ACCESS">KVKK ACCESS</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label for="logAction">Aksiyon</label>
-              <select id="logAction" name="action">
-                <option value="ALLOW">ALLOW</option>
-                <option value="BLOCK">BLOCK</option>
-                <option value="ALERT">ALERT</option>
-                <option value="FAILED_LOGIN">FAILED_LOGIN</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label for="logSourceIp">Kaynak IP</label>
-              <div class="input-with-btn">
-                <input type="text" id="logSourceIp" name="source_ip" placeholder="örn. 192.168.1.45" inputmode="decimal" maxlength="45">
-                <button class="btn btn-sm" id="randomIpBtn" type="button" title="Rastgele IPv4 üret">
-                  <svg><use href="#i-dice"/></svg> Rastgele IP
-                </button>
-              </div>
-            </div>
-            <div class="form-row">
-              <label for="logDestIp">Hedef IP <span class="text-muted">(opsiyonel)</span></label>
-              <input type="text" id="logDestIp" name="destination_ip" placeholder="örn. 185.220.101.42" maxlength="45">
-            </div>
-            <div class="form-row full">
-              <label for="logDetails">Olay Detayı</label>
-              <textarea id="logDetails" name="details" placeholder="Olayın kısa açıklaması..." required maxlength="500"></textarea>
-            </div>
-          </div>
-          <p class="form-hint">Kayıt, Firestore <span class="mono">logs</span> koleksiyonuna zaman damgasıyla eklenir.</p>
-        </div>
-        <div class="modal-foot">
-          <button class="btn" type="button" data-close-modal>Vazgeç</button>
-          <button class="btn btn-primary" type="submit" id="saveLogBtn">
-            <svg><use href="#i-plus"/></svg>
-            <span>Kaydı Oluştur</span>
-          </button>
-        </div>
-      </form>
     </div>
   </div>
 

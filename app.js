@@ -11,10 +11,8 @@ const firebaseConfig = {
 
 const FIREBASE_SDK_VERSION = "10.12.2";
 const LOGS_COLLECTION = "logs";
-const SEED_FILE = "logs.json";
 const API_KEY_STORAGE = "gemini_api_key";
-const DEMO_SESSION_KEY = "soc_demo_session";
-const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash-lite"];
 
 const VIEW_META = {
   overview: { title: "Genel Bakış", subtitle: "5651 & KVKK uyumlu güvenlik operasyon özeti" },
@@ -33,7 +31,6 @@ const state = {
   auth: null,
   fbAuth: null,
   user: null,
-  demo: false,
   authReady: false,
   authFailed: false,
   authMode: "login",
@@ -46,7 +43,6 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-
 function escapeHtml(value) {
   return String(value === null || value === undefined ? "" : value)
     .replace(/&/g, "&amp;")
@@ -94,7 +90,7 @@ function isWithinLast24Hours(value) {
   return diff >= -60000 && diff <= 24 * 60 * 60 * 1000;
 }
 
-const SEVERITIES = ["CRITICAL", "HIGH", "WARNING", "INFO", "RESOLVED"];
+const SEVERITIES = ["CRITICAL", "HIGH", "WARNING", "INFO"];
 
 function normalizeSeverity(raw) {
   const value = String(raw || "").toUpperCase();
@@ -103,18 +99,17 @@ function normalizeSeverity(raw) {
 
 function isResolvedLog(log) {
   const status = String(log.status || "").toLocaleLowerCase("tr");
-  return status === "incelendi" || status === "i̇ncelendi" || normalizeSeverity(log.severity) === "RESOLVED";
+  return status === "incelendi" || status === "i̇ncelendi";
 }
 
 function severityCounts() {
-  const counts = { CRITICAL: 0, HIGH: 0, WARNING: 0, INFO: 0, RESOLVED: 0 };
+  const counts = { CRITICAL: 0, HIGH: 0, WARNING: 0, INFO: 0 };
   state.logs.forEach((log) => {
-    const sev = isResolvedLog(log) ? "RESOLVED" : normalizeSeverity(log.severity);
+    const sev = normalizeSeverity(log.severity);
     counts[sev] += 1;
   });
   return counts;
 }
-
 function localTimestamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
@@ -165,10 +160,9 @@ function updateStatusbar({ count } = {}) {
   const project = $("statusProject");
   if (project) project.textContent = firebaseConfig.projectId || "-";
   const syncUser = $("statusUser");
-  if (syncUser) syncUser.textContent = state.user?.email || (state.demo ? "demo modu" : "-");
+  if (syncUser) syncUser.textContent = state.user?.email || "-";
 }
 
-/* --------------------------- SPA görünüm geçişleri ------------------------ */
 function switchView(name) {
   const target = VIEW_META[name] ? name : "overview";
   state.currentView = target;
@@ -187,7 +181,6 @@ function switchView(name) {
   if (title) title.textContent = meta.title;
   if (subtitle) subtitle.textContent = meta.subtitle;
 
-  // Grafikler gizli konumdayken 0 boyutla çizilmiş olabilir → görünür olunca yeniden ölçekle
   if (target === "overview") {
     requestAnimationFrame(() => {
       Object.values(state.charts).forEach((chart) => {
@@ -261,7 +254,7 @@ function bindModals() {
     });
   });
 
-  // Arka plana tıklama ile kapatma (kart içine tıklama kapatmaz)
+
   document.querySelectorAll(".modal-backdrop").forEach((modal) => {
     modal.addEventListener("mousedown", (event) => {
       if (event.target === modal) closeModal(modal.id);
@@ -329,8 +322,7 @@ function authErrorMessage(error) {
 
   if (code.includes("operation-not-allowed") || code.includes("configuration-not-found") || code.includes("admin-restricted-operation")) {
     return "Firebase Authentication bu projede etkin değil. Firebase Console → Authentication → " +
-      "\"Başlarken\" → Sign-in method bölümünden Email/Password sağlayıcısını etkinleştirin. " +
-      "(Alternatif: aşağıdaki demo modu bağlantısı.)";
+      "\"Başlarken\" → Sign-in method bölümünden Email/Password sağlayıcısını etkinleştirin.";
   }
   return error?.message || "Oturum işlemi tamamlanamadı.";
 }
@@ -421,15 +413,40 @@ function renderSessionUser(user, demo = false) {
   if (sSignIn) {
     const lastSignIn = user?.metadata?.lastSignInTime;
     sSignIn.textContent = lastSignIn ? new Date(lastSignIn).toLocaleString("tr-TR") : (demo ? "Demo oturumu" : "-");
+  }function renderSessionUser(user) {
+  const email = user?.email || "-";
+  const uid = user?.uid || "-";
+
+  const emailEl = $("userEmail");
+  const avatarEl = $("userAvatar");
+  const roleEl = $("userRole");
+  if (emailEl) emailEl.textContent = email;
+  if (avatarEl) avatarEl.textContent = firstLetter(email);
+  if (roleEl) roleEl.textContent = "SOC Analist";
+
+  const sEmail = $("settingsEmail");
+  const sAvatar = $("settingsAvatar");
+  const sUid = $("settingsUid");
+  const sSignIn = $("settingsSignIn");
+  const sVerified = $("settingsVerified");
+  const sProject = $("settingsProject");
+  const sSdk = $("settingsSdk");
+
+  if (sEmail) sEmail.textContent = email;
+  if (sAvatar) sAvatar.textContent = firstLetter(email);
+  if (sUid) sUid.textContent = `UID: ${uid}`;
+  if (sSignIn) {
+    const lastSignIn = user?.metadata?.lastSignInTime;
+    sSignIn.textContent = lastSignIn ? new Date(lastSignIn).toLocaleString("tr-TR") : "-";
   }
-  if (sVerified) sVerified.textContent = demo ? "Demo modu" : (user?.emailVerified ? "Doğrulandı" : "Doğrulanmadı");
+  if (sVerified) sVerified.textContent = user?.emailVerified ? "Doğrulandı" : "Doğrulanmadı";
   if (sProject) sProject.textContent = firebaseConfig.projectId || "-";
   if (sSdk) sSdk.textContent = `v${FIREBASE_SDK_VERSION}`;
 
   updateStatusbar();
 }
 
-
+}
 async function handleAuthSubmit(event) {
   event.preventDefault();
   if (!state.fbAuth || !state.auth) {
@@ -470,27 +487,13 @@ async function handleAuthSubmit(event) {
       : await signInWithEmailAndPassword(state.auth, email, password);
 
     toast(`${credential.user.email} olarak oturum açıldı.`, "success", "Giriş başarılı");
-  } catch (error) {
+ } catch (error) {
     console.error("Auth hatası:", error);
     const message = authErrorMessage(error);
     showAuthError(`<strong>Oturum açılamadı</strong>${escapeHtml(message)}`);
-    const code = String(error?.code || "").toLowerCase();
-    if (code.includes("operation-not-allowed") || code.includes("configuration-not-found") || code.includes("admin-restricted-operation")) {
-      $("authDemoBtn")?.classList.remove("hidden");
-      state.authFailed = true;
-    }
   } finally {
     setAuthBusy(false);
   }
-}
-
-function enterDemoMode() {
-  state.demo = true;
-  try { sessionStorage.setItem(DEMO_SESSION_KEY, "1"); } catch (_) { /* yoksay */ }
-  renderSessionUser(null, true);
-  showApp();
-  loadLogs();
-  toast("Demo modunda çalışıyorsunuz. Oturum kalıcı değildir.", "warning", "Demo modu");
 }
 
 async function handleLogout() {
@@ -501,9 +504,7 @@ async function handleLogout() {
   } catch (error) {
     console.error("Çıkış hatası:", error);
   }
-  state.demo = false;
   state.user = null;
-  try { sessionStorage.removeItem(DEMO_SESSION_KEY); } catch (_) { /* yoksay */ }
 
   state.logs = [];
   state.view = [];
@@ -528,12 +529,10 @@ async function initAuth() {
     state.authReady = true;
     state.authFailed = true;
     showAuthError(`<strong>Firebase başlatılamadı</strong>${escapeHtml(error.message)}`);
-    $("authDemoBtn")?.classList.remove("hidden");
     return;
   }
 
   const { onAuthStateChanged } = state.fbAuth;
-
 
   const authTimeout = setTimeout(() => {
     if (state.authReady) return;
@@ -544,36 +543,21 @@ async function initAuth() {
       "<strong>Oturum durumu alınamadı</strong>Firebase Authentication bu projede etkin olmayabilir. " +
       "Firebase Console → Authentication → Sign-in method bölümünden Email/Password sağlayıcısını etkinleştirin."
     );
-    $("authDemoBtn")?.classList.remove("hidden");
   }, 6000);
-
-  // onAuthStateChanged: oturum varsa panel, yoksa giriş ekranı
+ 
   onAuthStateChanged(state.auth, (user) => {
     clearTimeout(authTimeout);
     state.authReady = true;
     state.user = user || null;
 
-    if (user) {
-      state.demo = false;
-      try { sessionStorage.removeItem(DEMO_SESSION_KEY); } catch (_) { /* yoksay */ }
-      renderSessionUser(user, false);
+   if (user) {
+      renderSessionUser(user);
       showApp();
       loadLogs();
       return;
     }
 
-    let demoFlag = false;
-    try { demoFlag = sessionStorage.getItem(DEMO_SESSION_KEY) === "1"; } catch (_) { /* yoksay */ }
-
-    if (demoFlag) {
-      state.demo = true;
-      renderSessionUser(null, true);
-      showApp();
-      loadLogs();
-      return;
-    }
-
-    renderSessionUser(null, false);
+    renderSessionUser(null);
     showAuthScreen();
   }, (error) => {
     clearTimeout(authTimeout);
@@ -596,38 +580,6 @@ async function fetchLogs() {
   return snapshot.docs.map((docSnap) => ({ ...(docSnap.data() || {}), id: docSnap.id }));
 }
 
-async function seedLogsIfEmpty() {
-  await ensureFirestore();
-  const { collection, query, limit, getDocs, addDoc } = state.fb;
-
-  const probe = await getDocs(query(collection(state.db, LOGS_COLLECTION), limit(1)));
-  if (!probe.empty) return 0;
-
-  let records = [];
-  try {
-    const response = await fetch(SEED_FILE, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    records = Array.isArray(payload) ? payload : payload.logs || [];
-  } catch (error) {
-    console.warn("Başlangıç verisi okunamadı:", error);
-    return 0;
-  }
-
-  let imported = 0;
-  for (const record of records) {
-    if (!record || typeof record !== "object") continue;
-    const { id, ...data } = record;
-    if (!Object.keys(data).length) continue;
-    await addDoc(collection(state.db, LOGS_COLLECTION), {
-      ...data,
-      status: data.status || "Aktif",
-      seeded: true
-    });
-    imported += 1;
-  }
-  return imported;
-}
 
 async function loadLogs({ silent = false } = {}) {
   if (!silent) {
@@ -640,9 +592,8 @@ async function loadLogs({ silent = false } = {}) {
     });
   }
 
-  try {
+try {
     await ensureFirestore();
-    const imported = await seedLogsIfEmpty();
     state.logs = await fetchLogs();
     state.lastSync = new Date();
 
@@ -651,13 +602,7 @@ async function loadLogs({ silent = false } = {}) {
     updateStatusbar({ count: state.logs.length });
 
     if (!silent) {
-      toast(
-        imported > 0
-          ? `Firestore'a ${imported} başlangıç kaydı (logs.json) aktarıldı.`
-          : `${state.logs.length} kayıt Firestore'dan yüklendi.`,
-        "success",
-        "Firestore bağlı"
-      );
+      toast(`${state.logs.length} kayıt Firestore'dan yüklendi.`, "success", "Firestore bağlı");
     }
   } catch (error) {
     console.error("Firestore yükleme hatası:", error);
@@ -684,17 +629,11 @@ async function loadLogs({ silent = false } = {}) {
   }
 }
 
-async function createLog(payload) {
-  await ensureFirestore();
-  const { collection, addDoc } = state.fb;
-  const ref = await addDoc(collection(state.db, LOGS_COLLECTION), payload);
-  return ref.id;
-}
 
 async function markLogResolved(id) {
   await ensureFirestore();
   const { doc, updateDoc } = state.fb;
-  await updateDoc(doc(state.db, LOGS_COLLECTION, String(id)), { status: "İncelendi", severity: "RESOLVED" });
+  await updateDoc(doc(state.db, LOGS_COLLECTION, String(id)), { status: "İncelendi" });
 }
 
 async function deleteLogRecord(id) {
@@ -718,9 +657,8 @@ function actionBadge(action) {
 }
 
 function severityBadge(log) {
-  const resolved = isResolvedLog(log);
-  const sev = resolved ? "RESOLVED" : normalizeSeverity(log.severity);
-  return `<span class="tag ${sev.toLowerCase()}">${escapeHtml(resolved ? "ÇÖZÜLDÜ" : sev)}</span>`;
+  const sev = normalizeSeverity(log.severity);
+  return `<span class="tag ${sev.toLowerCase()}">${escapeHtml(sev)}</span>`;
 }
 
 function statusBadge(log) {
@@ -774,7 +712,6 @@ function renderKPIs() {
   if (badge) badge.textContent = String(threat);
 }
 
-/* ---------------------------------- Grafikler ----------------------------- */
 function ensureChartDefaults() {
   if (typeof Chart === "undefined") return false;
   Chart.defaults.color = "#93a4c0";
@@ -799,10 +736,10 @@ function renderSeverityChart() {
   const canvas = $("chartSeverity");
   if (!canvas || !ensureChartDefaults()) return;
 
-  const counts = severityCounts();
-  const labels = ["CRITICAL", "HIGH", "WARNING", "INFO", "RESOLVED"];
+ const counts = severityCounts();
+  const labels = ["CRITICAL", "HIGH", "WARNING", "INFO"];
   const data = labels.map((label) => counts[label] || 0);
-  const palette = { CRITICAL: "#f43f5e", HIGH: "#fb923c", WARNING: "#facc15", INFO: "#38bdf8", RESOLVED: "#22c55e" };
+  const palette = { CRITICAL: "#f43f5e", HIGH: "#fb923c", WARNING: "#facc15", INFO: "#38bdf8" };
 
   if (!state.charts.severity) {
     state.charts.severity = new Chart(canvas.getContext("2d"), {
@@ -953,8 +890,8 @@ function applyFilters() {
       if (!haystack.includes(needle)) return false;
     }
 
-    if (severity !== "ALL") {
-      const sev = isResolvedLog(log) ? "RESOLVED" : normalizeSeverity(log.severity);
+  if (severity !== "ALL") {
+      const sev = normalizeSeverity(log.severity);
       if (sev !== severity) return false;
     }
 
@@ -1162,7 +1099,6 @@ function renderCompliance() {
   set("cmpDlp", dlpAlerts.length);
   set("cmpRate", `${resolveRate}%`);
 
-  // Denetim kontrol listesi
   const checklist = $("complianceChecklist");
   if (checklist) {
     const items = [
@@ -1210,7 +1146,7 @@ function renderCompliance() {
       </li>`).join("");
   }
 
-  // Son KVKK erişim hareketleri
+  
   const tbody = $("kvkkTbody");
   if (tbody) {
     const recent = kvkkLogs.slice(0, 6);
@@ -1435,21 +1371,20 @@ async function generateAiSummary() {
   const scope = `Toplam kayıt: ${state.logs.length}
 CRITICAL: ${counts.CRITICAL}, HIGH: ${counts.HIGH}, WARNING: ${counts.WARNING}, INFO: ${counts.INFO}, RESOLVED: ${counts.RESOLVED}`;
 
-  const promptText = `Sen kurumsal bir SOC (Security Operations Center) kıdemli analistisin ve KVKK / 5651 uyum danışmanısın.
-Aşağıda şirketin canlı log yönetim panelinden alınan kayıtlar yer alıyor.
+const promptText = `Sen kıdemli bir Siber Güvenlik Operasyon Merkezi (SOC) Analisti ve 5651 / KVKK Uyum Danışmanısın. Aşağıdaki anonimleştirilmiş sistem ve güvenlik loglarını teknik derinlikle analiz et ve Türkçe olarak kapsamlı bir Yönetici Güvenlik Raporu hazırla.
 
-Görev:
-1) Teknik olmayan üst yönetime sunulacak Türkçe, kısa ve maddeli bir "Günlük Güvenlik Özeti" hazırla.
-2) KVKK kapsamında kişisel veri ihlali riski taşıyan olayları ayrıca vurgula.
-3) 5651 kapsamında şüpheli erişim/engelleme hareketlerini belirt.
-4) En fazla 3 somut aksiyon önerisi ver.
-5) Başlıklar için "##" ve maddeler için "-" kullan.
+Raporu şu 4 başlık altında yapılandır:
+1. GENEL RİSK DURUMU VE ÖZET: Toplam olay sayısı, kritik/yüksek tehdit yoğunluğu ve sistemin genel güvenlik skoru değerlendirmesi.
+2. KRİTİK VE YÜKSEK SEVİYELİ OLAYLARIN TEKNİK ANALİZİ: Yetki yükseltme (sudo/su) denemeleri, kullanıcı hesabı değişiklikleri ve şüpheli erişimleri; kaynak/hedef IP, kullanıcı adı ve zaman damgası korelasyonuyla tek tek açıkla.
+3. 5651 SAYILI KANUN VE KVKK MEVZUATI DEĞERLENDİRMESİ: Log bütünlüğü (SHA-256), yetkisiz erişim girişimlerinin kişisel veri güvenliğine etkisi ve KVKK 72 saatlik ihlal bildirimi gerekliliği açısından hukuki risk analizi.
+4. ÖNCELİKLİ TEKNİK VE İDARİ AKSİYON PLANI: Sistem yöneticilerinin hemen uygulaması gereken somut sıkılaştırma (hardening), erişim kısıtlama ve izleme adımları.
 
-Özet metrikler:
+Analiz Edilecek Log Kayıtları:
+
 ${scope}
 
 Log Kayıtları (en yeni ${recent.length} kayıt):
-${JSON.stringify(recent, null, 2)}`;
+${JSON.stringify(recent)}`;
 
   aiBusy("Model log kayıtlarını inceliyor...");
   let lastError = null;
@@ -1462,10 +1397,13 @@ ${JSON.stringify(recent, null, 2)}`;
         {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: { temperature: 0.3, maxOutputTokens: 1600 }
-          })
+       body: JSON.stringify({
+  contents: [{ parts: [{ text: promptText }] }],
+  generationConfig: {
+    temperature: 0.3,
+    maxOutputTokens: 4096
+  }
+})
         }
       );
 
@@ -1517,7 +1455,7 @@ async function copyReport() {
     return;
   }
 
-  const header = `SOC Analist Paneli — Günlük Yönetici Özeti\nOluşturma: ${new Date().toLocaleString("tr-TR")}\nAnalist: ${state.user?.email || "demo"}\n\n`;
+  const header = `SOC Analist Paneli — Günlük Yönetici Özeti\nOluşturma: ${new Date().toLocaleString("tr-TR")}\nAnalist: ${state.user?.email || "-"}\n\n`;
   const content = header + state.aiReportText;
 
   try {
@@ -1568,53 +1506,6 @@ function fillRandomIp() {
   input.focus();
 }
 
-
-async function handleCreateLog(event) {
-  event.preventDefault();
-
-  const saveBtn = $("saveLogBtn");
-  const original = saveBtn ? saveBtn.innerHTML : "";
-
-  const payload = {
-    timestamp: localTimestamp(),
-    log_type: $("logType")?.value || "5651_WEB",
-    action: $("logAction")?.value || "ALLOW",
-    severity: normalizeSeverity($("logSeverity")?.value),
-    user: ($("logUser")?.value || "").trim(),
-    source_ip: ($("logSourceIp")?.value || "").trim(),
-    destination_ip: ($("logDestIp")?.value || "").trim(),
-    details: ($("logDetails")?.value || "").trim(),
-    status: "Aktif",
-    source: "soc-console"
-  };
-
-  if (!payload.user || !payload.details) {
-    toast("Kullanıcı ve olay detayı zorunludur.", "warning", "Eksik bilgi");
-    return;
-  }
-
-  try {
-    if (saveBtn) {
-      saveBtn.disabled = true;
-      saveBtn.innerHTML = `<span class="spinner"></span> Kaydediliyor...`;
-    }
-
-    await createLog(payload);
-    closeModal("logModal");
-    $("newLogForm")?.reset();
-
-    await loadLogs({ silent: true });
-    toast("Log kaydı Firestore'a eklendi.", "success", "Kayıt oluşturuldu");
-  } catch (error) {
-    console.error("Log ekleme hatası:", error);
-    toast(error.message, "error", "Kayıt eklenemedi");
-  } finally {
-    if (saveBtn) {
-      saveBtn.disabled = false;
-      saveBtn.innerHTML = original;
-    }
-  }
-}
 
 async function handleRowAction(event) {
   const button = event.target.closest("[data-action]");
@@ -1706,36 +1597,33 @@ function bindEvents() {
   });
   $("sidebarBackdrop")?.addEventListener("click", closeSidebar);
 
-  // Log modalı
-  $("openLogModalBtn")?.addEventListener("click", () => openModal("logModal"));
-  $("newLogForm")?.addEventListener("submit", handleCreateLog);
-  $("randomIpBtn")?.addEventListener("click", fillRandomIp);
 
-  // AI
+ 
+ 
+ 
+
   $("aiGenerateBtn")?.addEventListener("click", generateAiSummary);
   $("aiKeyBtn")?.addEventListener("click", () => openModal("keyModal"));
   $("saveKeyBtn")?.addEventListener("click", handleSaveKey);
   $("clearKeyBtn")?.addEventListener("click", handleClearKey);
   $("copyReportBtn")?.addEventListener("click", copyReport);
 
-  // Ayarlar sekmesi
+ 
   $("settingsSaveKeyBtn")?.addEventListener("click", handleSaveKeyFromSettings);
   $("settingsClearKeyBtn")?.addEventListener("click", handleClearKey);
   $("settingsGoAiBtn")?.addEventListener("click", () => switchView("ai"));
   $("settingsLogoutBtn")?.addEventListener("click", handleLogout);
 
-  // Yenile / çıkış
+
   $("refreshBtn")?.addEventListener("click", () => loadLogs());
   $("logoutBtn")?.addEventListener("click", handleLogout);
 
-  // Kimlik doğrulama
+
   document.querySelectorAll("[data-auth-mode]").forEach((tab) => {
     tab.addEventListener("click", () => setAuthMode(tab.dataset.authMode));
   });
   $("authForm")?.addEventListener("submit", handleAuthSubmit);
-  $("authDemoBtn")?.addEventListener("click", enterDemoMode);
 
-  // Tablo / tehdit aksiyonları
   document.addEventListener("click", handleRowAction);
 
   bindFilters();
@@ -1766,5 +1654,4 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
-
 
